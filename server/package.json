@@ -1,6 +1,6 @@
 {
   "name": "insurancexdate-mcp",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "InsuranceXDate REST proxy MCP server. Bypasses upstream MCP bugs at /api2/McpData by translating MCP-style param names and routing search to the working REST endpoint at /api2/Search.",
   "private": true,
   "type": "module",

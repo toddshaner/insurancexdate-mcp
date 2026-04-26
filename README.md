@@ -150,11 +150,13 @@ search(
 match(state="PA", name=["Acme Logistics", "Acme Logistics Inc"])
 ```
 
-**Pull rate filings for Berkley Casualty in IL, workers' comp only, severity 4+:**
+**Pull rate filings for Berkley Casualty in IL, workers' comp only, severity 4:**
 
 ```
 serff_search(carrier_naic=15911, state="IL", insurance_type="16.0", severity="4")
 ```
+
+The `severity` filter is **exact-match, not a threshold**: `severity="4"` returns only severity-4 filings, not 4 and 5. To capture both 4 and 5 (the broker-attack range), call twice and merge response-side, or omit `severity` entirely and filter the response client-side.
 
 ## State-data coverage
 

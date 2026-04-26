@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] — 2026-04-26
+
+Polish release based on a second external code review pass on v1.1.4. Three small guardrail and documentation fixes; no schema changes, no new tools, no transport or protocol changes.
+
+### Changed
+- **`XDATE_DISABLE_PAID` env var now accepts the standard truthy set, not only `"1"`.** A user entering `"true"`, `"yes"`, `"on"`, or `"enabled"` (case-insensitive, whitespace-trimmed) into the install-dialog `disable_paid_tools` field now disables paid tools as the field label promises. Previously, only the literal string `"1"` worked; any other value silently kept paid tools enabled — the opposite of what a user reading "safety switch" would reasonably expect. Manifest field description updated to enumerate the accepted values.
+- **`severity` parameter on `serff_search` clarified as exact-match, not a threshold**, in both the schema description (`tools.ts`) and the README usage example. Earlier copy said "severity 4+" which implied threshold behavior; the upstream actually treats it as exact match (verified empirically: `severity="4"` returns only severity-4 filings). Doc now states the behavior plainly and notes the workaround (call twice and merge, or omit and filter response-side) for the broker-attack 4-and-5 range.
+
+### Fixed
+- **CHANGELOG reference-link block** at the bottom now includes `[1.1.4]` and `[1.1.5]`. The v1.1.4 release shipped without re-attaching the reference link; Keep-a-Changelog style expects the full ladder.
+
 ## [1.1.4] — 2026-04-26
 
 Hardening release based on external code review feedback. No new tools; all changes are validation tightening, install-surface improvements, and doc fixes.
@@ -92,6 +103,8 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.1.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.5
+[1.1.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.4
 [1.1.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.3
 [1.1.2]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.2
 [1.1.1]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.1

@@ -124,7 +124,7 @@ export const SerffSearchSchema: Shape = {
   insurance_type: z.string().optional()
     .describe("Insurance type code (TOI). Top-level group format like '16.0' (Workers Comp), '20.0' (Commercial Auto), '05.0' (CMP). Sub-TOI format like '05.0001' (Builders Risk), '05.0002' (Businessowners). Verified working server-side 2026-04-26. Returns only filings matching the TOI."),
   severity: z.string().optional()
-    .describe("Filing severity filter, '1' through '5'. Higher = more impactful. '4' and '5' are the broker-attack signal range. Verified working server-side 2026-04-26."),
+    .describe("Filing severity filter, '1' through '5'. Higher = more impactful. '4' and '5' are the broker-attack signal range. **Exact-match filter, not a threshold** — `severity='4'` returns only severity-4 filings, not 4 and 5. To capture both 4 and 5 (broker-attack range), call twice and merge response-side, or omit `severity` entirely and filter response-side. Verified working server-side 2026-04-26."),
   limit: z.number().int().min(1).max(50).optional()
     .describe("Results per page, 1-50. Default 20."),
   offset: z.number().int().min(0).optional()
@@ -167,14 +167,24 @@ export interface XdateHandlers {
 }
 
 /**
- * Emergency brake: if XDATE_DISABLE_PAID=1 in env, paid tools return isError
- * without hitting the network. Defense-in-depth for environments where the
- * client should only have access to free reads (e.g. evaluation, demos, or
- * untrusted MCP clients without their own confirmation gates).
+ * Emergency brake: if XDATE_DISABLE_PAID is a truthy string in env, paid tools
+ * return isError without hitting the network. Defense-in-depth for environments
+ * where the client should only have access to free reads (e.g. evaluation,
+ * demos, or untrusted MCP clients without their own confirmation gates).
  * Free tools (search, match, filter) are always enabled.
+ *
+ * Tolerant truthy parsing: accepts "1", "true", "yes", "on", "enabled"
+ * (case-insensitive, whitespace-trimmed). A user setting a "safety switch"
+ * via the .mcpb install-dialog string field may reasonably enter "true" or
+ * "yes" and expect that to count; v1.1.4 was strict-"1"-only and silently
+ * left paid tools enabled for any other value, the opposite of the labeled
+ * intent. v1.1.5 widened to the standard truthy set.
  */
+const TRUTHY_DISABLE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+
 function paidDisabled(): boolean {
-  return (process.env.XDATE_DISABLE_PAID ?? "").trim() === "1";
+  const value = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
+  return TRUTHY_DISABLE_VALUES.has(value);
 }
 
 const PAID_DISABLED_RESULT: CallToolResult = {
