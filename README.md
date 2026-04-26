@@ -204,10 +204,13 @@ Filings can carry multiple. Use as a client-side post-fetch filter:
 
 **NOT in the response (manual XRate UI or SERFF Filing Access required):**
 
-- Per-tier % impacts for favorable-direction papers (the response only itemizes the harmed direction; the full per-tier table is UI-only)
-- Full filing memorandum / actuarial exhibits
-- Parent carrier-group identifier (the response carries per-paper NAICs but no group-level ID; group-level lookups require a separate `filter` call enumerating groups)
-- Class codes as a structured array (they appear inside `disproportionately_affected` as unstructured text — regex-parseable, but not a typed field)
+- **Per-tier % impacts for favorable-direction papers.** The response itemizes the harmed direction; the full per-tier table is UI-only. (For filing 21434 verified 2026-04-26: API surfaced CCIC +22.4% and BCC +18.1%; UI also exposes KRIC +6.8%, StarNet -0.6%, MECC -12.2%.)
+- **Per-paper Loss Cost Multiplier (LCM) values.** UI shows the new LCM alongside the % impact — the underlying repricing mechanism. API's `actuarial_justifications` references LCM alignment qualitatively but doesn't expose values per paper.
+- **Specific reallocation movement rates.** Carriers using a multi-paper reallocation strategy (move accounts between papers to mask the headline rate impact) disclose specific transition % values in the UI (e.g., "45% of CCIC renewals to BCC, 30% of BCC renewals to KRIC"). API narrative references "reallocation" qualitatively but doesn't expose these as structured fields.
+- **Per-paper policyholder counts.** UI breaks the affected-policyholder count down by paper. API gives total policyholders but not the per-paper distribution.
+- **Full filing memorandum / actuarial exhibits.** Only the 3-bullet `actuarial_justifications` summary is in the response.
+- **Parent carrier-group identifier.** The response carries per-paper NAICs but no group-level ID; group-level lookups require a separate `filter` call enumerating groups.
+- **Class codes as a structured array.** Class codes appear inside `disproportionately_affected` as unstructured text — regex-parseable, but not a typed field.
 
 If you're building an automated pipeline that depends on the full per-tier table or actuarial exhibits, plan for a manual SERFF Filing Access lookup as a final step. The API gets you ~3.5 of 4 things you'd want for programmatic triage; the last 0.5 still requires a manual read.
 
