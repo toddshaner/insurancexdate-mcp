@@ -1,0 +1,8 @@
+server/src/**
+server/tsconfig.json
+server/node_modules/typescript/**
+server/node_modules/@types/**
+server/node_modules/.bin/**
+**/*.map
+**/*.ts
+README.md

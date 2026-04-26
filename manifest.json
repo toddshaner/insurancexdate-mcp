@@ -1,0 +1,55 @@
+{
+  "manifest_version": "0.3",
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/manifest.schema.json",
+  "name": "insurancexdate",
+  "display_name": "InsuranceXDate",
+  "version": "1.1.3",
+  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database and SERFF rate-filing API. 7 tools: search, match, filter, company_details, talkpoints, serff_search, serff_filing.",
+  "long_description": "Wraps the InsuranceXDate REST API and MCP endpoints for use in Claude Desktop, Claude Code, and Cowork. Implements parameter translation between upstream MCP and REST schemas, URL decoding for company UIDs returned by REST search and consumed by MCP detail lookups, HTTP timeout via AbortSignal, response.ok validation with isError MCP responses on failures, structuredContent on search results for typed LLM reasoning, schema validation via zod (state codes, dates, premium / mod / employee bands, addloptions and policyoptions enums), and an optional XDATE_DISABLE_PAID env flag for defense-in-depth on paid endpoints. Built on @modelcontextprotocol/sdk v1.29 and Anthropic's bundled Node runtime per the April 2026 MCPB packaging conventions. Unofficial third-party client; not affiliated with InsuranceXDate.",
+  "author": {
+    "name": "Todd Shaner",
+    "email": "todd.shaner@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "insurance",
+    "workers-comp",
+    "insurancexdate",
+    "prospecting",
+    "rest-proxy",
+    "mcp",
+    "claude-desktop"
+  ],
+  "privacy_policies": [
+    "https://www.insurancexdate.com/privacy.php"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/dist/index.js"],
+      "env": {
+        "INSURANCEXDATE_API_KEY": "${user_config.api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "InsuranceXDate API Key",
+      "description": "Your InsuranceXDate API key from https://www.insurancexdate.com/settings.php#api (API/MCP tab). Stored in your OS keychain (Windows Credential Manager / macOS Keychain).",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "tools": [
+    { "name": "search", "description": "Free workers' comp prospect search. v1.1.3 schema covers all upstream filter params: state/dates/class/sic/industry/county/carrier/agent/peo lists, premium/mod/employee ranges, policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO)" },
+    { "name": "match", "description": "Free find-by-name endpoint via /api2/Match. Look up a business by name+state/fein/phone. Returns UID. Subject to subscription tier" },
+    { "name": "filter", "description": "Free filter-value lookup (carriers, classes, SIC, counties, agents, peolist, policyoptions, addloptions)" },
+    { "name": "company_details", "description": "Paid ($0.25): full company details by UID" },
+    { "name": "talkpoints", "description": "Paid ($0.10): prospecting talking points by UID" },
+    { "name": "serff_search", "description": "Paid ($0.05): SERFF rate-filing search with server-side filters (carrier_naic, state, insurance_type, severity)" },
+    { "name": "serff_filing", "description": "Paid ($0.10): full SERFF filing details" }
+  ]
+}
