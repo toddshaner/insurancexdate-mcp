@@ -1,10 +1,10 @@
 # InsuranceXDate MCP
 
-A TypeScript MCP server packaged as an Anthropic [`.mcpb` Desktop Extension](https://www.anthropic.com/engineering/desktop-extensions). Wraps the [InsuranceXDate](https://www.insurancexdate.com) workers'-comp prospect database and SERFF rate-filing API for use in Claude Desktop, Claude Code, and Cowork.
+A TypeScript [Model Context Protocol](https://modelcontextprotocol.io) server that wraps the [InsuranceXDate](https://www.insurancexdate.com) workers'-comp prospect database and SERFF rate-filing API. Works with any MCP client — Claude Desktop, Cursor, Continue, Zed, Cline, or a custom client built on the MCP SDK.
 
 > Unofficial third-party client. Not affiliated with InsuranceXDate. MIT licensed. Personal project — PRs welcome but no SLA on response times.
 
-Built on `@modelcontextprotocol/sdk` v1.29 and Anthropic's bundled Node runtime, following the April 2026 MCPB packaging conventions.
+Built on `@modelcontextprotocol/sdk` v1.29, Node 20+. Ships as both a pre-packaged Anthropic [`.mcpb` Desktop Extension](https://www.anthropic.com/engineering/desktop-extensions) for one-click install on Claude Desktop, and as plain Node source you can wire into any other MCP client's config.
 
 ## What it does
 
@@ -23,8 +23,8 @@ Exposes seven tools to MCP clients:
 ## Architecture
 
 ```
-Claude Desktop / Cowork
-        │  (stdio)
+MCP client (Claude Desktop, Cursor, Continue, Zed, custom...)
+        │  (stdio JSON-RPC)
         ▼
   InsuranceXDate MCP server (this repo)
         │
@@ -50,42 +50,81 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 - **URL-decode for UIDs:** company UIDs from `/api2/Search` come URL-encoded (`%2B`, `%2F`); wrapper decodes before forwarding to upstream MCP for paid lookups, which expect raw `+`/`/`
 - **Schema validation:** zod-validated input on every tool (state codes uppercase regex, dates MM-DD regex, premium/mod numeric, employee band 0-9, addloptions/policyoptions enum)
 - **Paid-tool gate:** set `XDATE_DISABLE_PAID=1` in env to short-circuit `company_details`, `talkpoints`, `serff_search`, `serff_filing` with `isError` responses. Defense-in-depth for environments where you want to whitelist free tools only
-- **Sensitive credential storage:** API key flows through `user_config.api_key` with `"sensitive": true`, which Claude Desktop stores in the OS keychain (Windows Credential Manager / macOS Keychain) — never on disk in the bundle
+- **Sensitive credential storage:** when installed via `.mcpb` on Claude Desktop, the API key flows through `user_config.api_key` with `"sensitive": true` and is stored in the OS keychain (Windows Credential Manager / macOS Keychain). On other MCP clients the server reads `INSURANCEXDATE_API_KEY` from `process.env`, so use whatever secret-handling pattern your client supports (env-var injection, secret store, etc.) — never hard-code keys in JSON config files committed to source control
 
 ## Install
 
-### Prerequisites
+The server runs as a Node.js process speaking MCP over stdio. Any MCP client can launch it. Pick the install path that matches your client.
 
-- Claude Desktop (macOS or Windows). No Developer Mode required for end-user install of a pre-built `.mcpb` — the format is designed for one-click install. Developer Mode is only required for Option B (building from source and loading an unpacked extension).
+### Prerequisites (all paths)
+
+- Node.js 20+ (only required for Options B / C / D — Option A bundles its own runtime)
 - An InsuranceXDate API key from your account's Settings → API / MCP page
 
-### Option A: install a pre-built release (no Developer Mode required)
+### Option A: Claude Desktop (one-click `.mcpb`)
 
 1. Download the `.mcpb` from the latest [Release](../../releases)
 2. Double-click the `.mcpb` file → Claude Desktop opens an install dialog
 3. Click Install
 4. Paste your InsuranceXDate API key when prompted
 
-The key is stored in the OS keychain via the manifest's `user_config.api_key` with `"sensitive": true`.
+The key is stored in the OS keychain via the manifest's `user_config.api_key` with `"sensitive": true`. No Developer Mode toggle required — `.mcpb` is designed for one-click end-user install.
 
-### Option B: build from source (Developer Mode required to load unpacked)
+### Option B: Cursor
+
+Build from source (see Option D), then add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "insurancexdate": {
+      "command": "node",
+      "args": ["/absolute/path/to/insurancexdate-mcp/server/dist/index.js"],
+      "env": {
+        "INSURANCEXDATE_API_KEY": "your-key-here"
+      }
+    }
+  }
+}
+```
+
+For team setups, store the key in a secret store and inject via Cursor's env handling rather than committing the key.
+
+### Option C: Continue, Zed, Cline, or any other MCP client with a config file
+
+Same shape as Option B — point the client's MCP config at `server/dist/index.js` and pass `INSURANCEXDATE_API_KEY` via the env block. Consult your client's MCP-config docs for the exact file path and JSON schema (most converge on something close to Cursor's format).
+
+For a custom client (Python, TypeScript, Go) launching the server directly, you only need:
+
+```sh
+INSURANCEXDATE_API_KEY=your-key-here node /path/to/server/dist/index.js
+```
+
+The server speaks standard MCP JSON-RPC on stdio. Anything that follows the protocol works.
+
+### Option D: Build from source
 
 ```sh
 git clone https://github.com/toddshaner/insurancexdate-mcp.git
 cd insurancexdate-mcp/server
 npm install
 npm run build               # tsc emits server/dist/*.js (noEmitOnError prevents broken builds)
-cd ..
+```
+
+`server/dist/index.js` is the entry point for Options B / C and any custom client.
+
+To repack the `.mcpb` for Claude Desktop after a source change:
+
+```sh
+cd ..                       # back to repo root
 npx -y @anthropic-ai/mcpb pack .
 ```
 
-Produces `insurancexdate-1.x.x.mcpb`. Install via Settings → Extensions → Install Extension.
-
-If you want a slimmer pack, run `npm prune --omit=dev` after build to strip TypeScript and `@types/*` from `node_modules` — `.mcpbignore` covers them anyway, but pruning is cleaner.
+For a slimmer `.mcpb`, run `npm prune --omit=dev` after build to strip TypeScript and `@types/*` from `node_modules` — `.mcpbignore` covers them anyway, but pruning is cleaner.
 
 ## Usage examples
 
-After install, in any Claude Desktop / Cowork chat:
+After install, in any MCP-enabled chat client:
 
 **Discover IL workers'-comp prospects, $250K+ annual premium, renewing in the next 60-120 days, with size-signal flags pre-filtered server-side:**
 

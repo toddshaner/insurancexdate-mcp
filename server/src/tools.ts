@@ -165,9 +165,10 @@ export interface XdateHandlers {
 
 /**
  * Emergency brake: if XDATE_DISABLE_PAID=1 in env, paid tools return isError
- * without hitting the network. Defense-in-depth in case a non-Cowork client
- * (without the xdate-enrich skill's confirmation gates) ever calls this MCP.
- * Free tools (search, filter) are always enabled.
+ * without hitting the network. Defense-in-depth for environments where the
+ * client should only have access to free reads (e.g. evaluation, demos, or
+ * untrusted MCP clients without their own confirmation gates).
+ * Free tools (search, match, filter) are always enabled.
  */
 function paidDisabled(): boolean {
   return (process.env.XDATE_DISABLE_PAID ?? "").trim() === "1";

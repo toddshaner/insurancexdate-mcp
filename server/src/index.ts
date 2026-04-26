@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * InsuranceXDate MCP server - TypeScript on Anthropic's bundled Node runtime.
+ * InsuranceXDate MCP server - TypeScript on Node 20+ (or Anthropic's bundled
+ * runtime when shipped as a .mcpb to Claude Desktop). Client-agnostic at the
+ * protocol level: any MCP client speaking stdio JSON-RPC can launch it.
  *
  * Wraps the XDate REST API at /api2/Search with parameter translation,
  * bridging the schema differences between the upstream MCP at /api2/McpData

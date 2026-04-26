@@ -29,7 +29,7 @@ const MCP_FALLBACK = `${API_BASE}/McpData`;
 /** REST `pagelimit` hard cap. Values above silently fall back to 10. */
 const REST_PAGELIMIT_CAP = 50;
 
-/** Per-fetch timeout. XDate can be slow; this prevents hangs from looking like Cowork disconnects. */
+/** Per-fetch timeout. XDate can be slow; this prevents hangs from looking like client disconnects. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /** MCP-style -> REST-style param name translation for /Search. */
@@ -104,7 +104,7 @@ export class XdateClient {
   /**
    * Call /api2/Search (REST) with translated param names. Used for the `search` tool.
    * Returns both `content` (text fallback for clients that don't read structured)
-   * and `structuredContent` (typed JSON) so Claude can reason over records reliably.
+   * and `structuredContent` (typed JSON) so an LLM client can reason over records reliably.
    */
   async search(args: Record<string, unknown>): Promise<CallToolResult> {
     const restArgs: Record<string, unknown> = {};
@@ -214,7 +214,7 @@ export class XdateClient {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      // 30s timeout: avoids the "looks like Cowork disconnected" symptom when
+      // 30s timeout: avoids the "looks like the client disconnected" symptom when
       // XDate is slow. Aborts the underlying socket cleanly.
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });

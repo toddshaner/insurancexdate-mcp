@@ -64,7 +64,7 @@ Code-review fixes from an external reviewer. Eight changes shipped together.
 
 ## [1.0.0] — 2026-04-25
 
-Initial public release. TypeScript MCP server packaged as Anthropic `.mcpb` Desktop Extension on the bundled Node runtime.
+Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb` Desktop Extension (one-click install on Claude Desktop) and as plain Node source compatible with any MCP client.
 
 ### Added
 - Six tools: `search`, `filter`, `company_details`, `talkpoints`, `serff_search`, `serff_filing`
