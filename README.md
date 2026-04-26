@@ -56,10 +56,10 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 
 ### Prerequisites
 
-- Claude Desktop with Developer Mode enabled (Settings → Developer → Developer Mode)
+- Claude Desktop (macOS or Windows). No Developer Mode required for end-user install of a pre-built `.mcpb` — the format is designed for one-click install. Developer Mode is only required for Option B (building from source and loading an unpacked extension).
 - An InsuranceXDate API key from your account's Settings → API / MCP page
 
-### Option A: install a pre-built release
+### Option A: install a pre-built release (no Developer Mode required)
 
 1. Download the `.mcpb` from the latest [Release](../../releases)
 2. Double-click the `.mcpb` file → Claude Desktop opens an install dialog
@@ -68,7 +68,7 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 
 The key is stored in the OS keychain via the manifest's `user_config.api_key` with `"sensitive": true`.
 
-### Option B: build from source
+### Option B: build from source (Developer Mode required to load unpacked)
 
 ```sh
 git clone https://github.com/toddshaner/insurancexdate-mcp.git
