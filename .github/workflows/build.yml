@@ -38,6 +38,10 @@ jobs:
           echo "All dist artifacts produced."
         working-directory: server
 
+      - name: MCP tools/list smoke test (no-network)
+        run: node scripts/smoke-test-tools-list.mjs
+        working-directory: server
+
       - name: Pack .mcpb (smoke test)
         run: |
           npx -y @anthropic-ai/mcpb pack . || (echo "mcpb pack failed"; exit 1)

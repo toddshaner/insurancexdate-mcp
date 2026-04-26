@@ -3,8 +3,8 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/manifest.schema.json",
   "name": "insurancexdate",
   "display_name": "InsuranceXDate",
-  "version": "1.1.3",
-  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database and SERFF rate-filing API. 7 tools: search, match, filter, company_details, talkpoints, serff_search, serff_filing.",
+  "version": "1.1.4",
+  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database and SERFF rate-filing API. 7 tools: search, match, filter, company_details, talkpoints, serff_search, serff_filing. v1.1.4 adds a paid-tool safety switch and tightens schema validation.",
   "long_description": "Wraps the InsuranceXDate REST API and MCP endpoints. Works with any MCP client (Claude Desktop, Cursor, Continue, Zed, Cline, custom). Implements parameter translation between upstream MCP and REST schemas, URL decoding for company UIDs returned by REST search and consumed by MCP detail lookups, HTTP timeout via AbortSignal, response.ok validation with isError MCP responses on failures, structuredContent on search results for typed LLM reasoning, schema validation via zod (state codes, dates, premium / mod / employee bands, addloptions and policyoptions enums), and an optional XDATE_DISABLE_PAID env flag for defense-in-depth on paid endpoints. Built on @modelcontextprotocol/sdk v1.29 and Node 20+. This .mcpb bundle targets Claude Desktop's one-click install path; the same server source works on any MCP client via stdio. Unofficial third-party client; not affiliated with InsuranceXDate.",
   "author": {
     "name": "Todd Shaner",
@@ -30,7 +30,8 @@
       "command": "node",
       "args": ["${__dirname}/server/dist/index.js"],
       "env": {
-        "INSURANCEXDATE_API_KEY": "${user_config.api_key}"
+        "INSURANCEXDATE_API_KEY": "${user_config.api_key}",
+        "XDATE_DISABLE_PAID": "${user_config.disable_paid_tools}"
       }
     }
   },
@@ -41,6 +42,13 @@
       "description": "Your InsuranceXDate API key from https://www.insurancexdate.com/settings.php#api (API/MCP tab). Stored in your OS keychain (Windows Credential Manager / macOS Keychain).",
       "sensitive": true,
       "required": true
+    },
+    "disable_paid_tools": {
+      "type": "string",
+      "title": "Disable paid tools (safety switch)",
+      "description": "Set to '1' to disable the four paid endpoints (company_details $0.25, talkpoints $0.10, serff_search $0.05, serff_filing $0.10). When disabled, those tools return an isError response without making any network call. Useful for evaluation, demos, or any context where you only want the free tools (search, match, filter) exposed. Leave blank or set to '0' to enable paid tools normally.",
+      "default": "",
+      "required": false
     }
   },
   "tools": [

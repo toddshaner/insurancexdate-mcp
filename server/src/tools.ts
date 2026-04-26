@@ -135,19 +135,22 @@ export const SerffFilingSchema: Shape = {
   filing_id: z.number().int().describe("Filing ID from serff_search.filings[].filing_id. Integer (XDate's internal ID, not the public SERFF tracking number)."),
 };
 
-// -------- Output schemas (only for tools that return structuredContent) --------
+// -------- Output schemas --------
 
 /**
- * Permissive output schema for `search`. The XDate REST shape is
- * `{ status, data: { resultstats: {...}, results: [...] } }` but we don't
- * lock the inner shape because XDate may add fields. Permissive validation
- * is enough for the SDK to attach structuredContent; downstream consumers
- * read the actual fields.
+ * No output schema is declared for `search`. The XDate REST response shape is
+ * `{ status, data: { resultstats: {...}, results: [...] } }` but XDate is the
+ * source of truth and may add top-level or nested fields without notice. A
+ * declared zod output schema would silently strip unknown keys from
+ * `structuredContent` at SDK validation time (default zod behavior on
+ * unknown-key input is strip, not passthrough, and zod's `.passthrough()`
+ * cannot be expressed as a `ZodRawShape` — only on a constructed ZodObject,
+ * which the MCP SDK's `registerTool` doesn't accept here).
+ *
+ * The wrapper attaches `structuredContent` directly from the parsed REST
+ * response in `xdate-client.ts#search`, so consumers receive whatever XDate
+ * returns, undamaged.
  */
-export const SearchOutputSchema: Shape = {
-  status: z.string().optional(),
-  data: z.object({}).passthrough().optional(),
-};
 
 // -------- Handler factory --------
 
@@ -191,10 +194,51 @@ function gatePaid(handler: Handler): Handler {
   };
 }
 
+/**
+ * Reject `match` calls that arrive with no identifier. Every field on
+ * MatchSchema is `.optional()` because the upstream `/api2/Match` endpoint
+ * accepts any of name / fein / phone / address as the lookup key, and there's
+ * no zod-Shape way to express "at least one of these required" (zod's `.refine()`
+ * lives on a constructed ZodObject, not on a ZodRawShape, and the MCP SDK's
+ * registerTool wants a Shape). So we guard at runtime: an empty-bodied or
+ * state-only match() call is functionally useless and would either return the
+ * full state universe or surface a confusing upstream error. We short-circuit
+ * with a clean isError response naming the required fields.
+ */
+const MATCH_IDENTIFIER_KEYS = ["name", "fein", "phone", "address"] as const;
+
+function hasMatchIdentifier(args: Record<string, unknown>): boolean {
+  for (const key of MATCH_IDENTIFIER_KEYS) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim().length > 0) return true;
+    if (Array.isArray(value) && value.some((v) => typeof v === "string" && v.trim().length > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const MATCH_NO_IDENTIFIER_RESULT: CallToolResult = {
+  content: [
+    {
+      type: "text",
+      text: "match requires at least one identifier: name (array of strings), fein, phone, or address (array of strings). Calling match with only `state` (or with no args) returns no useful result.",
+    },
+  ],
+  isError: true,
+};
+
+function requireMatchIdentifier(handler: Handler): Handler {
+  return async (args) => {
+    if (!hasMatchIdentifier(args)) return MATCH_NO_IDENTIFIER_RESULT;
+    return handler(args);
+  };
+}
+
 export function buildHandlers(client: XdateClient): XdateHandlers {
   return {
     search: (args) => client.search(args),
-    match: (args) => client.match(args),
+    match: requireMatchIdentifier((args) => client.match(args)),
     filter: (args) => client.mcpPassthrough("filter", args),
     company_details: gatePaid((args) => client.mcpPassthrough("company_details", args)),
     talkpoints: gatePaid((args) => client.mcpPassthrough("talkpoints", args)),

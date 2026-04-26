@@ -19,7 +19,6 @@ import { XdateClient } from "./xdate-client.js";
 import {
   buildHandlers,
   SearchSchema,
-  SearchOutputSchema,
   MatchSchema,
   FilterSchema,
   CompanyDetailsSchema,
@@ -56,7 +55,7 @@ async function main() {
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.1.3",
+    version: "1.1.4",
   });
 
   server.registerTool(
@@ -65,7 +64,10 @@ async function main() {
       title: "Search prospects",
       description: TOOL_DESCRIPTIONS.search,
       inputSchema: SearchSchema as AnySchema,
-      outputSchema: SearchOutputSchema as AnySchema,
+      // No outputSchema declared — see tools.ts comment under "Output schemas".
+      // Summary: zod's default strip-on-unknown behavior would drop new fields
+      // XDate may add at the top level; passthrough at the top can't be expressed
+      // as a ZodRawShape. Better to let structuredContent flow through unmodified.
     },
     handlers.search as AnyHandler,
   );

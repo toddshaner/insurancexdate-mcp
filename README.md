@@ -28,10 +28,15 @@ MCP client (Claude Desktop, Cursor, Continue, Zed, custom...)
         ▼
   InsuranceXDate MCP server (this repo)
         │
-        ├──► /api2/Search   (REST)   for `search`, `match`
+        ├──► /api2/Search   (REST)   for `search`
         │     translates MCP-style param names (premfrom/premto/modfrom/
         │     modto/limit/offset) to REST equivalents (fromprem/toprem/
         │     frommod/tomod/pagelimit/pageon)
+        │
+        ├──► /api2/Match    (REST)   for `match`
+        │     find-by-name endpoint (the upstream MCP's `name` param on
+        │     `search` is silently dropped at REST, so `/Match` is the
+        │     correct route for find-by-identifier lookups)
         │
         └──► /api2/McpData  (MCP)    for `filter`, `company_details`,
               `talkpoints`, `serff_search`, `serff_filing`

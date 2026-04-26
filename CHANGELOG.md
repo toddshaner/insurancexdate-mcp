@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] — 2026-04-26
+
+Hardening release based on external code review feedback. No new tools; all changes are validation tightening, install-surface improvements, and doc fixes.
+
+### Added
+- **`disable_paid_tools` user_config option** in the `.mcpb` manifest. End users on Claude Desktop can now toggle the paid-tool safety switch from the install dialog without setting an env var manually. When set to `"1"`, the four paid endpoints (`company_details`, `talkpoints`, `serff_search`, `serff_filing`) return an `isError` response without making any network call. Defense-in-depth for evaluation, demos, or any context where only the free tools (`search`, `match`, `filter`) should be exposed. Internally wired through `XDATE_DISABLE_PAID` env var (which still works directly for non-`.mcpb` installs).
+- **CI tools-list smoke test.** The `Build` workflow now spawns the built server, sends a `tools/list` JSON-RPC request, and asserts the response includes all 7 expected tool names. Catches regressions where the server boots but fails to register tools properly.
+
+### Changed
+- **`match` tool now rejects calls with no identifier.** Every field on `MatchSchema` is `.optional()` because the upstream `/api2/Match` endpoint accepts any of name / fein / phone / address as the lookup key. Calling `match()` or `match({state:"IL"})` previously hit the upstream and either returned the full state universe or surfaced a confusing error. The wrapper now short-circuits with a clean `isError` response naming the required fields. (Implemented as a runtime guard rather than zod `.refine()` because the MCP SDK's `registerTool` accepts a `ZodRawShape`, not a constructed `ZodObject`.)
+- **`search` no longer declares an `outputSchema`.** The previous declaration was permissive at the inner `data` level but strict at the top — if XDate added a top-level field, the SDK's zod validation would silently strip it from `structuredContent` (default zod behavior on unknown keys is strip, not passthrough). Removing the declaration lets `structuredContent` flow through unmodified, which matches what the original comment intended. Trade-off: weaker type-generation for downstream clients; in exchange, no risk of silently losing data XDate adds upstream.
+- **README architecture diagram split** to show `match` routing to `/api2/Match` (not `/api2/Search`). Reflects the actual runtime routing.
+
+### Fixed
+- `.gitignore` now excludes `Engineering memo.md` and `*.internal.md` to prevent internal-only artifacts (engineering-share memos, etc.) from accidentally entering the public repo.
+
+### Notes
+- The v1.1.3 `.mcpb` artifact had stale embedded manifest metadata (display_name "InsuranceXDate (REST proxy)", license `UNLICENSED`, description claiming "Six tools") because it was packed before the v1.1.3 manifest reframe landed. The v1.1.4 release ships a freshly packed `.mcpb` from current source.
+
 ## [1.1.3] — 2026-04-26
 
 ### Added
