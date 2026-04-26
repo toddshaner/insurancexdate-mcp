@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: server
+
+      - name: Type-check and build
+        run: npm run build
+        working-directory: server
+
+      - name: Verify dist artifacts
+        run: |
+          test -f dist/index.js
+          test -f dist/tools.js
+          test -f dist/xdate-client.js
+          echo "All dist artifacts produced."
+        working-directory: server
+
+      - name: Pack .mcpb (smoke test)
+        run: |
+          npx -y @anthropic-ai/mcpb pack . || (echo "mcpb pack failed"; exit 1)
+          ls -la *.mcpb
