@@ -167,6 +167,54 @@ InsuranceXDate's data depth varies by state. Some filters only have data to oper
 
 Outside these footprints the corresponding filters have no data to operate on. This is upstream data availability, not a wrapper limitation.
 
+## SERFF response notes
+
+`serff_search` and `serff_filing` route to the upstream MCP and return XDate's structured shape of SERFF rate filings. A few things worth knowing before you build against the response:
+
+### Sentiment language is policyholder-perspective, not broker-perspective
+
+The `sentiment` field uses `bad` / `good` / `neutral` from the policyholder's point of view. The XRate web UI shows the same data with broker-perspective labels.
+
+| API `sentiment` | XRate UI label | Meaning | Broker-side action |
+|---|---|---|---|
+| `bad` | Offensive | Unfavorable to policyholders (rate up, coverage cut) | Attack opportunity (filing carrier's renewal is exposed) |
+| `good` | Defensive | Favorable to policyholders (rate down, expanded coverage) | Retention play (don't displace a filing helping the insured) |
+| `neutral` | Neutral | Administrative, insignificant, or new program | Watch only |
+
+A consumer reading `sentiment: "good"` and assuming it's good for the broker reaches the wrong conclusion. Document this translation in any client code that surfaces SERFF data to brokers.
+
+### `severity_types` observed values
+
+Filings can carry multiple. Use as a client-side post-fetch filter:
+
+`RATE_CHANGE`, `LCM_ADJUSTMENT` (WC-specific repricing), `TIERING_REVISION` (winners/losers within a carrier book), `COVERAGE_MODIFICATION`, `UNDERWRITING_REVISION` (eligibility shifts), `ADMINISTRATIVE` (typically skip), `NEW_PROGRAM`, `MARKET_EXIT` (carrier exiting line/state/segment), `DIVIDEND_PLAN`.
+
+### What `serff_filing` returns vs. what's NOT in the response
+
+`serff_filing` surfaces structured fields suitable for programmatic triage at scale, but is curated rather than exhaustive. Verified empirically against filing 21434 (Berkley Casualty IL WC, public SERFF tracking BNIC-134422662):
+
+**Structured and reliable:**
+
+- `carrier_names` + `naic_codes` — full per-paper list when a filing covers a multi-paper carrier group
+- `disproportionately_affected` — text array describing the harmed papers and class codes (e.g., `"Carolina Casualty Insurance Company (CCIC) facing a 22.4% increase"`); explicit % values for the harmed direction
+- `affected_naics` — array of NAICS sector codes hit by the filing
+- `actuarial_justifications` — short summary bullets of the carrier's stated reasoning
+- `key_coverage_changes` — coverage form / endorsement changes
+- `narrative` — pre-shaped markdown text (multiple labeled sections, written for downstream broker-attack use cases, not actuarial prose)
+
+**NOT in the response (manual XRate UI or SERFF Filing Access required):**
+
+- Per-tier % impacts for favorable-direction papers (the response only itemizes the harmed direction; the full per-tier table is UI-only)
+- Full filing memorandum / actuarial exhibits
+- Parent carrier-group identifier (the response carries per-paper NAICs but no group-level ID; group-level lookups require a separate `filter` call enumerating groups)
+- Class codes as a structured array (they appear inside `disproportionately_affected` as unstructured text — regex-parseable, but not a typed field)
+
+If you're building an automated pipeline that depends on the full per-tier table or actuarial exhibits, plan for a manual SERFF Filing Access lookup as a final step. The API gets you ~3.5 of 4 things you'd want for programmatic triage; the last 0.5 still requires a manual read.
+
+### NAICS code formatting
+
+`affected_naics` returns 3-digit raw integers (`[238, 482, 485, 711]`). The XRate UI displays the same codes 4-digit zero-padded (`0238`, `0482`, etc.). Same codes, different formats — normalize before comparison if you parse both surfaces.
+
 ## Development
 
 ### Project structure
@@ -209,7 +257,9 @@ curl -s -X POST https://www.insurancexdate.com/api2/McpData \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq .
 ```
 
-The CHANGELOG documents how this audit caught two parameter-name mismatches (one in `serff_search`, one in `search`) that were previously surfacing as "filter not applied" symptoms.
+Diff every param name and type against the wrapper's zod schemas. Mismatches in name or type at the upstream surface silently as "filter not applied" symptoms — the call succeeds, the param is dropped, and the response is the unfiltered universe. The CHANGELOG documents two cases this audit caught (`serff_search`'s `naic`/`type` vs. upstream `carrier_naic`/`insurance_type`, and `search`'s `naicslist` advertised but no-op upstream).
+
+When integrating against a 3rd-party API where you have an alternative source of truth (a public registry, a documented spec, a UI you can verify against), cross-validate at least one record end-to-end. For SERFF, public SERFF Filing Access (free) carries the same filing data and the API's `disposition_date` should match exactly. Drift between the two is itself a signal worth investigating.
 
 ## Acknowledgments
 
