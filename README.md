@@ -17,7 +17,7 @@ Exposes seven tools to MCP clients:
 | `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, counties, agents, PEO providers, policy options, additional-data options |
 | `company_details` | $0.25 | Full account detail by UID: carrier history, mod / LCM, premium, payroll, contacts, multi-state policy footprint |
 | `talkpoints` | $0.10 | Prospecting talking points + percentile flags by UID |
-| `serff_search` | $0.05 | SERFF rate-filing search by `carrier_naic` (integer) + state + insurance type (TOI) + severity. v1.1.2+ uses the upstream's documented parameter names |
+| `serff_search` | $0.05 | SERFF rate-filing search by `carrier_naic` (integer) + state + insurance type (TOI) + severity. Uses the upstream's documented parameter names |
 | `serff_filing` | $0.10 | Full SERFF filing detail by integer `filing_id` |
 
 ## Architecture

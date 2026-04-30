@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] — 2026-04-30
+
+Metadata and documentation cleanup release. No tool changes, no schema changes, no transport changes.
+
+### Changed
+- **Search and filter descriptions now describe the current working field surface in present tense.** Removed stale "v1.1.3 schema" phrasing from the `.mcpb` manifest and runtime tool descriptions.
+- **`naicslist` is explicitly documented as intentionally unexposed** because the upstream REST endpoint ignores it. Users should use `industrylist` or `siclist` instead.
+- **`serff_search` docs now describe the upstream parameter names without version-gated wording.** This keeps the README and runtime descriptions accurate for new installs.
+- **Package and runtime metadata aligned to v1.1.6** so `manifest.json`, `server/package.json`, `server/package-lock.json`, and the MCP server's reported version agree.
+
 ## [1.1.5] — 2026-04-26
 
 Polish release based on a second external code review pass on v1.1.4. Three small guardrail and documentation fixes; no schema changes, no new tools, no transport or protocol changes.
@@ -103,6 +113,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.1.6]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.6
 [1.1.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.5
 [1.1.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.4
 [1.1.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.3
