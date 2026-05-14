@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.8] — 2026-05-14
+
+Metadata correction for `match` cost classification. No change to endpoint behavior.
+
+### Fixed
+
+- **Runtime match description now explicitly says `match` is free-class/subscription-gated, not one of the per-call paid tools.** Claude had summarized `match` as paid after the v1.1.7 install even though `/api2/Match` worked and the wrapper never routed it through the paid-tool gate.
+- **Paid-disabled message now lists all free tools: `search`, `match`, and `filter`.** Previously the `XDATE_DISABLE_PAID=1` guard correctly left `match` enabled, but its error message told users to use only `search` and `filter`, creating a false cost-classification signal.
+
 ## [1.1.7] — 2026-05-14
 
 Surgical correction to the `filter` tool's parameter list. No functional change to `search`; the affected enums remain valid on `search` as before.
@@ -123,6 +132,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.1.8]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.8
 [1.1.7]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.7
 [1.1.6]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.6
 [1.1.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.5

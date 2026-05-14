@@ -55,7 +55,7 @@ async function main() {
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.1.7",
+    version: "1.1.8",
   });
 
   server.registerTool(
