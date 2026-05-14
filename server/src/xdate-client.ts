@@ -134,8 +134,8 @@ export class XdateClient {
    * Call /api2/Match (REST). Find a business by name + state / FEIN / phone.
    * The proper find-by-name endpoint (search's `name` param doesn't actually filter at REST).
    * Returns CallToolResult wrapping the parsed JSON response. Note that this endpoint
-   * may return HTTP 4xx (unauthorized) for API keys without /Match access in their
-   * subscription tier — surfaced as a clean isError MCP response.
+   * may return HTTP 4xx (unauthorized) for account/key/request problems even though XDate support confirmed no additional service is required for Match on
+   * the active account; such errors are surfaced as clean isError MCP responses.
    */
   async match(args: Record<string, unknown>): Promise<CallToolResult> {
     try {

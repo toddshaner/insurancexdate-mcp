@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] — 2026-05-14
+
+### Changed
+
+- **Match support confirmation reflected in connector metadata.** XDate support confirmed `/api2/Match` does not require additional service and is not a pay-per-call endpoint. The tool description now says Match is free, account-enabled, and should be treated as an account/key/request troubleshooting issue if a 401 appears, not as a plan add-on by default.
+- **Match behavior documented from vendor response.** Match is fuzzy: XDate widens the search and returns the best/highest-score match.
+- No API behavior changed. This is a metadata/documentation patch on top of v1.1.8.
 ## [1.1.8] — 2026-05-14
 
 Metadata correction for `match` cost classification. No change to endpoint behavior.
@@ -132,6 +139,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.1.9]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.9
 [1.1.8]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.8
 [1.1.7]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.7
 [1.1.6]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.6

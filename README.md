@@ -13,7 +13,7 @@ Exposes seven tools to MCP clients:
 | Tool | Cost | Purpose |
 |---|---|---|
 | `search` | Free | Workers'-comp prospect search by state, renewal window, class, SIC, industry, county, carriers, agents, premium range, mod range, employee band (0-9), policy options (AR / multi-state / PEO), additional-data filters (BENEFITS / DOT / NPO / OSHA / PEO) |
-| `match` | Free | Find a specific business by `state` + `name[]` + optional `address[]` / `fein` / `phone`. Routes to `/api2/Match`. Some subscription tiers do not include access |
+| `match` | Free | Find a specific business by `state` + `name[]` + optional `address[]` / `fein` / `phone`. Routes to `/api2/Match`. No additional service required per XDate support; fuzzy lookup returns the highest-score match |
 | `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, counties, agents, PEO providers. Policy options and additional-data options are fixed `search` enums, not filter lookups |
 | `company_details` | $0.25 | Full account detail by UID: carrier history, mod / LCM, premium, payroll, contacts, multi-state policy footprint |
 | `talkpoints` | $0.10 | Prospecting talking points + percentile flags by UID |
