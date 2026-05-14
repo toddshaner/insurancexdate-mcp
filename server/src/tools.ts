@@ -87,10 +87,8 @@ export const FilterSchema: Shape = {
     "carriergrouplist",
     "agentlist",
     "peolist",
-    "policyoptions",
-    "addloptions",
   ])
-    .describe("Filter param to look up. One of: countylist, classlist, siclist, industrylist, carrierlist, carriergrouplist, agentlist, peolist, policyoptions, addloptions. Note: naicslist was removed in v1.1.3 (the REST endpoint does not apply this filter; use industrylist or siclist instead). policyoptions enum: AR/MULTISTATE/PEO. addloptions enum: BENEFITS/DOT/NPO/OSHA/PEO."),
+    .describe("Filter param to look up. One of: countylist, classlist, siclist, industrylist, carrierlist, carriergrouplist, agentlist, peolist. Note: naicslist was removed in v1.1.3 (the REST endpoint does not apply this filter; use industrylist or siclist instead). policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(): policyoptions ['AR','MULTISTATE','PEO'], addloptions ['BENEFITS','DOT','NPO','OSHA','PEO']."),
   statelist: z.array(STATE_CODE).optional()
     .describe("Optional state filter (uppercase two-letter codes)"),
   search: z.string().optional()
@@ -263,7 +261,7 @@ export function buildHandlers(client: XdateClient): XdateHandlers {
 export const TOOL_DESCRIPTIONS = {
   search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist is intentionally not supported because the upstream REST endpoint ignores it; use industrylist or siclist instead.",
   match: "Find a specific business by name+state/fein/phone (the proper find-by-name endpoint, not search). Returns the company UID and core fields. Useful for xdate-enrich Mode A workflows that look up a known prospect by name. Note: requires subscription tier with /Match access — may return 'unauthorized' for some API keys.",
-  filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers, policyoptions, addloptions. naicslist is intentionally not exposed because it is a no-op upstream. Free.",
+  filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers. naicslist is intentionally not exposed because it is a no-op upstream. policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(). Free.",
   company_details: "Full company details for a UID: carrier history, mod rates, premium, payroll, agents, contacts, multi-state policy footprint. Cost: $0.25/call. Saving or caching forbidden by XDate terms.",
   talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: $0.10/call. Saving or caching forbidden.",
   serff_search: "Search SERFF rate filings. Uses carrier_naic integer, insurance_type, and severity. Server-side filters: carrier_naic, state, insurance_type (TOI like '16.0' for WC), severity (1-5). Client-side filters: sentiment, severity_types, sub_type. Cost: $0.05/call.",

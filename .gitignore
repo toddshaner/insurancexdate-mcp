@@ -34,3 +34,6 @@ yarn-error.log*
 # (e.g., engineering-share memos drafted for specific people, internal context.)
 Engineering memo.md
 *.internal.md
+reference/
+support-tickets/
+ziVrj0zN

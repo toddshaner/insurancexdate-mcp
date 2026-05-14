@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] — 2026-05-14
+
+Surgical correction to the `filter` tool's parameter list. No functional change to `search`; the affected enums remain valid on `search` as before.
+
+### Fixed
+- **`filter` tool no longer claims to accept `policyoptions` or `addloptions`.** These are fixed enums on the `search` tool (`AR`/`MULTISTATE`/`PEO` and `BENEFITS`/`DOT`/`NPO`/`OSHA`/`PEO`), not values to look up via the upstream `/api2/Search/Filter` endpoint. Including them in the filter param enum was a v1.1.3 oversight: the wrapper accepted the call, passed it upstream, and the upstream returned a confusing `Invalid param` message that lists a stale set of valid params (still includes `naicslist`). That looked like evidence of a pre-v1.1.3 server during a 2026-05-14 stack-verification pressure test. Filter's valid params are now: countylist, classlist, siclist, industrylist, carrierlist, carriergrouplist, agentlist, peolist. Search semantics unchanged — pass `policyoptions` and `addloptions` directly to `search()`.
+
+### Notes
+- Surfaced 2026-05-14 during XDate connector troubleshooting. False-positive on version mismatch traced to upstream filter error-message contents lagging the v1.1.3 schema.
+
 ## [1.1.6] — 2026-04-30
 
 Metadata and documentation cleanup release. No tool changes, no schema changes, no transport changes.
@@ -113,6 +123,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.1.7]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.7
 [1.1.6]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.6
 [1.1.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.5
 [1.1.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.4
