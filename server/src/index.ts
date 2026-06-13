@@ -26,6 +26,7 @@ import {
   SerffSearchSchema,
   SerffFilingSchema,
   TOOL_DESCRIPTIONS,
+  warnIfDisablePaidUnrecognized,
 } from "./tools.js";
 
 /**
@@ -49,14 +50,28 @@ async function main() {
     console.error("INSURANCEXDATE_API_KEY environment variable is required");
     process.exit(1);
   }
+  // A key with interior whitespace or control characters would be rejected by
+  // undici's header validation per-call — and the thrown message echoes the
+  // header value, leaking the key into tool error text. Validate once at
+  // startup and exit WITHOUT echoing the key.
+  if (!/^[!-~]+$/.test(apiKey)) {
+    console.error(
+      "INSURANCEXDATE_API_KEY contains invalid characters (whitespace or control characters). Re-paste the key as a single line.",
+    );
+    process.exit(1);
+  }
+
+  warnIfDisablePaidUnrecognized();
 
   const client = new XdateClient(apiKey);
   const handlers = buildHandlers(client);
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.1.9",
+    version: "1.2.0",
   });
+  // Surface MCP protocol-level errors on stderr instead of swallowing them.
+  server.server.onerror = (err) => console.error("insurancexdate MCP error:", err);
 
   server.registerTool(
     "search",
@@ -74,7 +89,7 @@ async function main() {
 
   server.registerTool(
     "match",
-    { title: "Find business by name/FEIN/phone", description: TOOL_DESCRIPTIONS.match, inputSchema: MatchSchema as AnySchema },
+    { title: "Find business by name/FEIN/phone/address", description: TOOL_DESCRIPTIONS.match, inputSchema: MatchSchema as AnySchema },
     handlers.match as AnyHandler,
   );
 

@@ -60,7 +60,7 @@ export const SearchSchema: Shape = {
   premto: z.number().int().optional()
     .describe("Maximum annual premium dollars. WORKS - translated to toprem. Same 8-state coverage as premfrom."),
   modfrom: z.number().optional()
-    .describe("Minimum experience mod. WORKS - translated to frommod. Mod data ONLY available in 8 states: DE, MA, MN, NJ, NY, NC, OH, PA. Outside these states this filter has no data to operate on. NJ is the ONLY state with both Premium AND Mod coverage (Variant B sweet spot)."),
+    .describe("Minimum experience mod. WORKS - translated to frommod. Mod data ONLY available in 8 states: DE, MA, MN, NJ, NY, NC, OH, PA. Outside these states this filter has no data to operate on. NJ is the ONLY state with both Premium AND Mod coverage."),
   modto: z.number().optional()
     .describe("Maximum experience mod. WORKS - translated to tomod. Same 8-state coverage as modfrom."),
   fromemp: z.number().int().min(0).max(9).optional()
@@ -70,11 +70,11 @@ export const SearchSchema: Shape = {
   policyoptions: z.array(z.enum(["AR", "MULTISTATE", "PEO"])).optional()
     .describe("Policy-status filters. AR = Assigned Risk Only. MULTISTATE = Multi-State Only (companies operating across multiple states). PEO = PEO Only (PEO-locked accounts). Array semantic is OR — passing multiple values widens the result set. Verified server-side filter 2026-04-26."),
   addloptions: z.array(z.enum(["BENEFITS", "DOT", "NPO", "OSHA", "PEO"])).optional()
-    .describe("Additional-data filters (signal-flag pre-filter). BENEFITS = with Form 5500 retirement-plan data (size proxy). DOT = with DOT/FMCSA data (transportation). NPO = with IRS 990 non-profit data. OSHA = with OSHA reporting data. PEO = with PEO data tracked. Array semantic is OR. For Campaign A WC pre-filter, use ['BENEFITS','DOT','OSHA'] to narrow to records with size signals. Then client-side score for triple-positive ranking. Verified server-side filter 2026-04-26."),
+    .describe("Additional-data filters (signal-flag pre-filter). BENEFITS = with Form 5500 retirement-plan data (size proxy). DOT = with DOT/FMCSA data (transportation). NPO = with IRS 990 non-profit data. OSHA = with OSHA reporting data. PEO = with PEO data tracked. Array semantic is OR. Tip: use ['BENEFITS','DOT','OSHA'] to narrow to records with size signals. Verified server-side filter 2026-04-26. NPO caveat (verified 2026-06-12): NPO matches companies with LINKED 990 data, including for-profit companies with affiliated foundations, and search results carry no per-record npo flag (only osha/dot/benefits)."),
   limit: z.number().int().min(1).max(50).optional()
     .describe("Results per call, 1-50. WORKS - translated to pagelimit. Hard cap 50."),
-  offset: z.number().int().min(1).optional()
-    .describe("Page number, 1-indexed. WORKS - translated to pageon. Real page-based pagination."),
+  offset: z.number().int().min(0).optional()
+    .describe("Page number, 0-indexed. WORKS - translated to pageon; pageon=N returns records N*limit onward (resultstats.offset echoes N*limit). Omit or pass 0 for the first page. Verified live 2026-06-12: default echoed offset 0, pageon=1 echoed offset 5 at limit 5, pageon=2 echoed offset 10."),
 };
 
 export const FilterSchema: Shape = {
@@ -186,11 +186,28 @@ function paidDisabled(): boolean {
   return TRUTHY_DISABLE_VALUES.has(value);
 }
 
+/**
+ * One-shot startup check: a non-empty XDATE_DISABLE_PAID outside the truthy
+ * set silently fails OPEN (paid tools stay enabled), the opposite of what a
+ * user setting a "safety switch" intends. Warn on stderr — never stdout on a
+ * stdio MCP server. Called once from index.ts main().
+ */
+export function warnIfDisablePaidUnrecognized(): void {
+  const raw = process.env.XDATE_DISABLE_PAID ?? "";
+  const value = raw.trim().toLowerCase();
+  if (value !== "" && !TRUTHY_DISABLE_VALUES.has(value)) {
+    console.error(
+      `XDATE_DISABLE_PAID is set to "${raw}", which is not a recognized disable value ` +
+        `(accepted, case-insensitive: 1, true, yes, on, enabled). Paid tools remain ENABLED.`,
+    );
+  }
+}
+
 const PAID_DISABLED_RESULT: CallToolResult = {
   content: [
     {
       type: "text",
-      text: "Paid XDate tools are disabled in this environment (XDATE_DISABLE_PAID=1). Unset the env var to re-enable, or use the free `search`, `match`, and `filter` tools.",
+      text: "Paid XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the free `search`, `match`, and `filter` tools.",
     },
   ],
   isError: true,
@@ -259,11 +276,11 @@ export function buildHandlers(client: XdateClient): XdateHandlers {
 // -------- Tool descriptions (used in registerTool calls) --------
 
 export const TOOL_DESCRIPTIONS = {
-  search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist is intentionally not supported because the upstream REST endpoint ignores it; use industrylist or siclist instead.",
-  match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for xdate-enrich Mode A workflows that look up a known prospect by name. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",
+  search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist is intentionally not supported because the upstream REST endpoint ignores it; use industrylist or siclist instead. Field masking (observed 2026-06-12): free search/match results return the literal string 'available' for name, fein, location, expyear, carrier, and carriergroup — treat that as 'present but withheld', not a value; real values require company_details.",
+  match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone/address (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for xdate-enrich Mode A workflows that look up a known prospect by name. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",
   filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers. naicslist is intentionally not exposed because it is a no-op upstream. policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(). Free.",
-  company_details: "Full company details for a UID: carrier history, mod rates, premium, payroll, agents, contacts, multi-state policy footprint. Cost: $0.25/call. Saving or caching forbidden by XDate terms.",
+  company_details: "Full company details for a UID. Response shape (observed 2026-06-12): summary (markdown top-line), user_status (CRM-style flag, often null), details (~77 fields incl. premium, payroll, mod/renmod, carrier, agent, signalScore, hazardGroup), carrier_history[] (full per-policy-term rows across years and states — can run to hundreds of rows for multi-state operators), _meta (per-field documentation). contacts and altloc are NO LONGER returned (upstream removal observed 2026-06-12; previously present through April 2026). The Q2 2026 DOT inspection/crash/cargo and NPO 990 datasets are platform-UI only — NOT in this response. Cost: $0.25/call. Saving or caching forbidden by XDate terms.",
   talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: $0.10/call. Saving or caching forbidden.",
-  serff_search: "Search SERFF rate filings. Uses carrier_naic integer, insurance_type, and severity. Server-side filters: carrier_naic, state, insurance_type (TOI like '16.0' for WC), severity (1-5). Client-side filters: sentiment, severity_types, sub_type. Cost: $0.05/call.",
+  serff_search: "Search SERFF rate filings. Uses carrier_naic integer, insurance_type, and severity. Server-side filters: carrier_naic, state, insurance_type (TOI like '16.0' for WC), severity (1-5). sentiment, severity_types, and sub_type are RESPONSE fields — filter the returned filings yourself; they are NOT accepted as tool arguments (undeclared args are silently dropped, the call still succeeds, and results come back unfiltered). Cost: $0.05/call.",
   serff_filing: "Full SERFF filing details: narratives, coverage changes, actuarial justifications. Cost: $0.10/call. Saving or caching forbidden.",
 };

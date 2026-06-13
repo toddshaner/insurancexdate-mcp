@@ -3,9 +3,9 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/manifest.schema.json",
   "name": "insurancexdate",
   "display_name": "InsuranceXDate",
-  "version": "1.1.9",
-  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database and SERFF rate-filing API. 7 tools: search, match, filter, company_details, talkpoints, serff_search, serff_filing. v1.1.9 metadata polish: incorporates XDate support confirmation that match requires no additional service and behaves as a fuzzy highest-score lookup; match remains free and not one of the per-call paid tools.",
-  "long_description": "Wraps the InsuranceXDate REST API and MCP endpoints. Works with any MCP client (Claude Desktop, Cursor, Continue, Zed, Cline, custom). Implements parameter translation between upstream MCP and REST schemas, URL decoding for company UIDs returned by REST search and consumed by MCP detail lookups, HTTP timeout via AbortSignal, response.ok validation with isError MCP responses on failures, structuredContent on search results for typed LLM reasoning, schema validation via zod (state codes, dates, premium / mod / employee bands, addloptions and policyoptions enums), and an optional XDATE_DISABLE_PAID env flag for defense-in-depth on paid endpoints. Built on @modelcontextprotocol/sdk v1.29 and Node 20+. This .mcpb bundle targets Claude Desktop's one-click install path; the same server source works on any MCP client via stdio. Unofficial third-party client; not affiliated with InsuranceXDate.",
+  "version": "1.2.0",
+  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database and SERFF rate-filing API. 7 tools: search, match, filter, company_details, talkpoints, serff_search, serff_filing.",
+  "long_description": "Wraps the InsuranceXDate REST API and MCP endpoints. Works with any MCP client (Claude Desktop, Cursor, Continue, Zed, Cline, custom). Implements parameter translation between upstream MCP and REST schemas, URL decoding for company UIDs returned by REST search and consumed by MCP detail lookups, HTTP timeout via AbortSignal, response.ok validation with isError MCP responses on failures, structuredContent on search and match results for typed LLM reasoning, schema validation via zod (state codes, dates, premium / mod / employee bands, addloptions and policyoptions enums), and an optional XDATE_DISABLE_PAID env flag for defense-in-depth on paid endpoints. Built on @modelcontextprotocol/sdk v1.29 and Node 20+. This .mcpb bundle targets Claude Desktop's one-click install path; the same server source works on any MCP client via stdio. Unofficial third-party client; not affiliated with InsuranceXDate.",
   "author": {
     "name": "Todd Shaner",
     "email": "todd.shaner@gmail.com"
@@ -52,10 +52,10 @@
     }
   },
   "tools": [
-    { "name": "search", "description": "Free workers' comp prospect search. Covers working upstream filter params: state/dates/class/sic/industry/county/carrier/agent/peo lists, premium/mod/employee ranges, policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). naicslist is intentionally not exposed because the upstream REST endpoint ignores it." },
-    { "name": "match", "description": "Free find-by-name endpoint via /api2/Match. Look up a business by name+state/fein/phone. Returns UID. No additional service required per XDate support; fuzzy lookup returns the highest-score match." },
-    { "name": "filter", "description": "Free filter-value lookup (carriers, classes, SIC, counties, agents, peolist). policyoptions and addloptions are fixed enums on search, not filter-tool lookups." },
-    { "name": "company_details", "description": "Paid ($0.25): full company details by UID" },
+    { "name": "search", "description": "Free workers' comp prospect search. Covers working upstream filter params: state/dates/class/sic/industry/county/carrier/carrier-group/agent/peo lists, premium/mod/employee ranges, policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). naicslist is intentionally not exposed because the upstream REST endpoint ignores it." },
+    { "name": "match", "description": "Free find-by-name endpoint via /api2/Match. Look up a business by any of name/fein/phone/address, optionally scoped by state. Returns UID. No additional service required per XDate support; fuzzy lookup returns the highest-score match." },
+    { "name": "filter", "description": "Free filter-value lookup (carriers, carrier groups, classes, SIC, industries, counties, agents, PEO providers). policyoptions and addloptions are fixed enums on search, not filter-tool lookups." },
+    { "name": "company_details", "description": "Paid ($0.25): full company details by UID — summary, details (incl. signalScore, hazardGroup), carrier_history[], _meta. contacts/altloc no longer returned upstream (observed 2026-06-12)." },
     { "name": "talkpoints", "description": "Paid ($0.10): prospecting talking points by UID" },
     { "name": "serff_search", "description": "Paid ($0.05): SERFF rate-filing search with server-side filters (carrier_naic, state, insurance_type, severity)" },
     { "name": "serff_filing", "description": "Paid ($0.10): full SERFF filing details" }

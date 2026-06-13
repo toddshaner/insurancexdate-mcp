@@ -39,10 +39,17 @@ jobs:
         working-directory: server
 
       - name: MCP tools/list smoke test (no-network)
-        run: node scripts/smoke-test-tools-list.mjs
+        run: npm test
         working-directory: server
 
       - name: Pack .mcpb (smoke test)
         run: |
-          npx -y @anthropic-ai/mcpb pack . || (echo "mcpb pack failed"; exit 1)
+          npx -y @anthropic-ai/mcpb pack .
           ls -la *.mcpb
+
+      - name: Upload packed .mcpb
+        if: matrix.node-version == '22.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: insurancexdate-mcpb
+          path: '*.mcpb'

@@ -174,7 +174,7 @@ export class XdateClient {
     try {
       response = await this.postJson(MCP_FALLBACK, body);
     } catch (err) {
-      return asMcpText(`Network error calling upstream MCP (${toolName}): ${errorMessage(err)}`, true);
+      return asMcpText(`Error calling upstream MCP (${toolName}): ${errorMessage(err)}`, true);
     }
 
     if (response && typeof response === "object") {
@@ -182,33 +182,28 @@ export class XdateClient {
         const result = (response as { result: unknown }).result;
         if (isCallToolResult(result)) return result;
         return asMcpText(
-          `Upstream MCP returned malformed result for ${toolName}: ${JSON.stringify(result)}`,
+          `Upstream MCP returned malformed result for ${toolName}: ${JSON.stringify(result).slice(0, 500)}`,
           true,
         );
       }
       if ("error" in response) {
         return asMcpText(
-          `Upstream MCP error on ${toolName}: ${JSON.stringify((response as { error: unknown }).error)}`,
+          `Upstream MCP error on ${toolName}: ${JSON.stringify((response as { error: unknown }).error).slice(0, 500)}`,
           true,
         );
       }
     }
     return asMcpText(
-      `Unexpected upstream response shape for ${toolName}: ${JSON.stringify(response)}`,
+      `Unexpected upstream response shape for ${toolName}: ${JSON.stringify(response).slice(0, 500)}`,
       true,
     );
   }
 
-  private async postJson(
-    url: string,
-    body: unknown,
-    extraHeaders: Record<string, string> = {},
-  ): Promise<unknown> {
+  private async postJson(url: string, body: unknown): Promise<unknown> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
       "X-API-Key": this.apiKey,
-      ...extraHeaders,
     };
     const response = await fetch(url, {
       method: "POST",
@@ -234,5 +229,8 @@ export class XdateClient {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  if (!(err instanceof Error)) return String(err);
+  // undici buries the useful part (ENOTFOUND, ECONNREFUSED...) in err.cause;
+  // without it every network failure surfaces as a bare "fetch failed".
+  return err.cause ? `${err.message} (${String(err.cause)})` : err.message;
 }

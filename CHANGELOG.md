@@ -4,6 +4,43 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-06-12
+
+Driven by two inputs: a full multi-dimension external code review of the wrapper (43 confirmed findings after adversarial verification), and live verification of XDate's Q2 2026 platform release ("DOT & Non-Profit Orgs", announced 2026-06-07) against the API.
+
+### Q2 2026 upstream verification (documented, no wrapper code required)
+
+- **`company_details` response envelope changed upstream.** Now `{ summary, user_status, details, carrier_history, _meta }`; previously `{ status, data: { details, contacts, carriers, altloc } }`. **`contacts` and `altloc` are no longer returned.** New fields: `signalScore`, `hazardGroup`, `_meta` per-field docs. Verified live 2026-06-12 against a 492-row trucking account and a 729-row account. The wrapper's no-output-schema passthrough design absorbed the change with zero code edits — descriptions and README updated to match.
+- **Q2 DOT inspection/crash/cargo and NPO 990 datasets are platform-UI only** — not present in any API response (verified against a `dot=1` trucking account). Tool descriptions now say so.
+- **`addloptions` NPO caveat documented:** filters server-side (verified) but matches companies with *linked* 990 data, including for-profit companies with affiliated foundations; search results carry no per-record `npo` flag.
+- **Free-tier field masking documented:** `search`/`match` results return the literal string `"available"` for name/fein/location/expyear/carrier/carriergroup.
+
+### Fixed
+
+- **`search.offset` was documented and validated as 1-indexed; REST `pageon` is 0-indexed.** Schema corrected to `min(0)` and description rewritten with live evidence (default echoes offset 0; `pageon=1` echoes offset 5 at limit 5). Previously the first page was unreachable with an explicit offset and `offset=1` silently skipped page one.
+- **Smoke test sent a duplicate `notifications/initialized` + duplicate `tools/list` (same id 1) on every run** — the stdout handler re-parsed the entire accumulated buffer per chunk. Now consumes completed lines and keeps the trailing partial. Also fails fast on JSON-RPC error responses (was an opaque 8s timeout) and ignores stdin EPIPE on fast child death.
+- **API keys containing whitespace/control characters could echo into per-call tool error text** via undici's header-validation exception. Startup now validates the key charset (`/^[!-~]+$/`) and exits with a generic message that never echoes the key.
+- **Network failures surfaced as bare "fetch failed"** — `errorMessage()` now appends `err.cause` (e.g. `ENOTFOUND`).
+- **HTTP 4xx/5xx from the upstream MCP was mislabeled "Network error"** — now "Error calling upstream MCP".
+- **Unrecognized non-empty `XDATE_DISABLE_PAID` values silently failed open** — startup now logs a stderr warning naming the accepted values when the setting won't disable anything.
+- **Paid-disabled message** no longer hardcodes `=1` and now points at the 'Disable paid tools' extension setting.
+
+### Added
+
+- **Smoke test now asserts the `search` input schema key set (21 params, exact equality — also proves `naicslist` stays absent), `limit.maximum === 50`, and serverInfo/package.json/manifest.json version agreement.** Guards the two regression classes that have actually bitten this repo: silent param drops and triple-version drift.
+- **`server.server.onerror` handler** — MCP protocol-level errors now log to stderr instead of vanishing.
+- **`npm test` script**; CI uses it. CI now uploads the packed `.mcpb` as a build artifact (single matrix leg) so releases can attach the CI-built bundle instead of a locally packed one (the v1.1.3 stale-manifest incident class).
+- **`engines: node >=20`** in package.json.
+
+### Changed
+
+- Truncated unbounded `JSON.stringify` of upstream payloads in error messages to 500 chars (parity with the REST error path).
+- Removed dead `extraHeaders` parameter from `postJson`.
+- Removed internal campaign jargon from public tool descriptions ("Campaign A", "Variant B sweet spot").
+- `serff_search` description now states that `sentiment`/`severity_types`/`sub_type` are response fields, not arguments — undeclared args are silently stripped by the SDK's zod parse, so passing them yields unfiltered results that look filtered.
+- `match` description/title now include `address`; docs note `match` also returns `structuredContent`; README/manifest tool rows synced with the actual schemas (carrier groups, industries, PEO providers).
+- manifest description no longer embeds per-release narrative (the field class that went stale in v1.1.3).
+
 ## [1.1.9] — 2026-05-14
 
 ### Changed
@@ -139,6 +176,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.2.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.2.0
 [1.1.9]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.9
 [1.1.8]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.8
 [1.1.7]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.7

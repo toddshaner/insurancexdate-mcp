@@ -12,10 +12,10 @@ Exposes seven tools to MCP clients:
 
 | Tool | Cost | Purpose |
 |---|---|---|
-| `search` | Free | Workers'-comp prospect search by state, renewal window, class, SIC, industry, county, carriers, agents, premium range, mod range, employee band (0-9), policy options (AR / multi-state / PEO), additional-data filters (BENEFITS / DOT / NPO / OSHA / PEO) |
-| `match` | Free | Find a specific business by `state` + `name[]` + optional `address[]` / `fein` / `phone`. Routes to `/api2/Match`. No additional service required per XDate support; fuzzy lookup returns the highest-score match |
-| `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, counties, agents, PEO providers. Policy options and additional-data options are fixed `search` enums, not filter lookups |
-| `company_details` | $0.25 | Full account detail by UID: carrier history, mod / LCM, premium, payroll, contacts, multi-state policy footprint |
+| `search` | Free | Workers'-comp prospect search by state, renewal window, class, SIC, industry, county, carriers, carrier groups, agents, PEO providers, premium range, mod range, employee band (0-9), policy options (AR / multi-state / PEO), additional-data filters (BENEFITS / DOT / NPO / OSHA / PEO) |
+| `match` | Free | Find a specific business by at least one of `name[]` / `fein` / `phone` / `address[]`, optionally scoped by `state`. Routes to `/api2/Match`. No additional service required per XDate support; fuzzy lookup returns the highest-score match |
+| `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, industries, counties, agents, PEO providers. Policy options and additional-data options are fixed `search` enums, not filter lookups |
+| `company_details` | $0.25 | Full account detail by UID: `summary`, `details` (~77 fields incl. premium, payroll, mod, `signalScore`, `hazardGroup`), `carrier_history[]` (per-policy-term rows, multi-year multi-state), `_meta` field docs. `contacts`/`altloc` no longer returned upstream (see Upstream response notes) |
 | `talkpoints` | $0.10 | Prospecting talking points + percentile flags by UID |
 | `serff_search` | $0.05 | SERFF rate-filing search by `carrier_naic` (integer) + state + insurance type (TOI) + severity. Uses the upstream's documented parameter names |
 | `serff_filing` | $0.10 | Full SERFF filing detail by integer `filing_id` |
@@ -51,10 +51,10 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 
 - **HTTP timeout:** 30s via `AbortSignal.timeout()` so slow upstream calls surface as clean errors instead of silent hangs
 - **HTTP error handling:** non-2xx responses throw with status + body excerpt. Wrapper returns `isError: true` MCP results rather than wrapping error bodies as success
-- **`structuredContent`:** `search` returns both `content` (text JSON fallback) and typed `structuredContent` so LLMs can reason over records without re-parsing
+- **`structuredContent`:** `search` and `match` return both `content` (text JSON fallback) and typed `structuredContent` so LLMs can reason over records without re-parsing
 - **URL-decode for UIDs:** company UIDs from `/api2/Search` come URL-encoded (`%2B`, `%2F`); wrapper decodes before forwarding to upstream MCP for paid lookups, which expect raw `+`/`/`
 - **Schema validation:** zod-validated input on every tool (state codes uppercase regex, dates MM-DD regex, premium/mod numeric, employee band 0-9, addloptions/policyoptions enum)
-- **Paid-tool gate:** set `XDATE_DISABLE_PAID=1` in env to short-circuit `company_details`, `talkpoints`, `serff_search`, `serff_filing` with `isError` responses. Defense-in-depth for environments where you want to whitelist free tools only
+- **Paid-tool gate:** set `XDATE_DISABLE_PAID=1` (also accepts `true` / `yes` / `on` / `enabled`, case-insensitive) in env to short-circuit `company_details`, `talkpoints`, `serff_search`, `serff_filing` with `isError` responses. Any other non-empty value leaves paid tools enabled and logs a startup warning to stderr. Defense-in-depth for environments where you want to whitelist free tools only
 - **Sensitive credential storage:** when installed via `.mcpb` on Claude Desktop, the API key flows through `user_config.api_key` with `"sensitive": true` and is stored in the OS keychain (Windows Credential Manager / macOS Keychain). On other MCP clients the server reads `INSURANCEXDATE_API_KEY` from `process.env`, so use whatever secret-handling pattern your client supports (env-var injection, secret store, etc.) — never hard-code keys in JSON config files committed to source control
 
 ## Install
@@ -169,6 +169,14 @@ InsuranceXDate's data depth varies by state. Some filters only have data to oper
 
 Outside these footprints the corresponding filters have no data to operate on. This is upstream data availability, not a wrapper limitation.
 
+## Upstream response notes (observed 2026-06-12)
+
+XDate revises its response surfaces without versioning or notice. Three things to know as of the Q2 2026 platform release:
+
+- **`company_details` envelope changed.** The response is now `{ summary, user_status, details, carrier_history, _meta }` (previously `{ status, data: { details, contacts, carriers, altloc } }`). `carriers` became `carrier_history` (full per-policy-term rows, each carrying the same ~77 fields as `details` — hundreds of rows for multi-state operators, easily 1-2 MB). **`contacts` and `altloc` are no longer returned.** New fields include `signalScore`, `hazardGroup`, and a `_meta` block documenting each field. The wrapper passes all of this through unmodified by design.
+- **Free-tier field masking on `search`/`match` results.** `name`, `fein`, `location`, `expyear`, `carrier`, and `carriergroup` return the literal string `"available"` — present-but-withheld markers, not values. Don't treat `"available"` as data; pull `company_details` for real values.
+- **The Q2 2026 DOT and NPO datasets are platform-UI only.** DOT safety inspections, crashes, cargo types, and NPO IRS-990 financials announced in June 2026 do not appear in any API response. The `addloptions` `NPO` flag does filter server-side, but it matches companies with *linked* 990 data — including for-profit companies with affiliated foundations — and search results carry no per-record `npo` flag.
+
 ## SERFF response notes
 
 `serff_search` and `serff_filing` route to the upstream MCP and return XDate's structured shape of SERFF rate filings. A few things worth knowing before you build against the response:
@@ -246,10 +254,13 @@ If you're building an automated pipeline that depends on the full per-tier table
 cd server
 npm install
 npm run build               # tsc with noEmitOnError; broken builds fail fast
-node dist/index.js          # smoke test stdio (set INSURANCEXDATE_API_KEY in env)
+npm test                    # no-network smoke test: tool registration, search schema shape, version consistency (same gate CI runs)
+node dist/index.js          # manual stdio poke (set INSURANCEXDATE_API_KEY in env)
 cd ..
 npx -y @anthropic-ai/mcpb pack .
 ```
+
+Version bumps touch three files — `server/src/index.ts` (serverInfo), `server/package.json` (use `npm version` in `server/` so the lockfile follows), and `manifest.json` — and the smoke test asserts all three agree, so a missed one fails `npm test` rather than shipping.
 
 ### Schema audit pattern
 
