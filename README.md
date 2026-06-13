@@ -75,6 +75,25 @@ The server runs as a Node.js process speaking MCP over stdio. Any MCP client can
 
 The key is stored in the OS keychain via the manifest's `user_config.api_key` with `"sensitive": true`. No Developer Mode toggle required — `.mcpb` is designed for one-click end-user install.
 
+> **⚠️ Windows Store / MSIX build of Claude Desktop:** Option A may not work. If Claude Desktop was installed from the Microsoft Store (MSIX, under `C:\Program Files\WindowsApps\Claude_*`), the "Install Extension" dialog can silently fail to fire — the file picker closes and nothing installs, with no error. That build also spawns MCP servers with a **stripped environment** that does not inherit your user variables. Use the config-file path instead:
+>
+> 1. Build from source (Option D) so you have `server\dist\index.js`.
+> 2. Add an `mcpServers` entry to `%APPDATA%\Claude\claude_desktop_config.json` pointing `node` at that file. **Put the key in the entry's `env` block** — on MSIX the server will not pick up a system-set `INSURANCEXDATE_API_KEY` on its own:
+>    ```json
+>    {
+>      "mcpServers": {
+>        "insurancexdate": {
+>          "command": "node",
+>          "args": ["C:\\path\\to\\insurancexdate-mcp\\server\\dist\\index.js"],
+>          "env": { "INSURANCEXDATE_API_KEY": "your-key-here" }
+>        }
+>      }
+>    }
+>    ```
+> 3. Fully quit Claude Desktop (system tray → Quit, not just close the window), then relaunch. Note: Claude rewrites this file from memory, so if an edit seems to revert, make it while the app is fully quit.
+>
+> **To keep the key out of plaintext config**, point `command` at a small wrapper script (`.cmd`) that reads `INSURANCEXDATE_API_KEY` from your OS credential store / `HKCU\Environment` and then launches node — the server reads the key from its own environment, so the wrapper only needs to set it before exec. Verify after launch: the tools register under the lowercase prefix `mcp__insurancexdate__*` (from the config key), not the `.mcpb` display name.
+
 ### Option B: Cursor
 
 Build from source (see Option D), then add to `~/.cursor/mcp.json`:
