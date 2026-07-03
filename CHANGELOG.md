@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-07-03
+
+Documentation truth-up from an independent verification pass run the same day as 1.3.0, after a distrust-the-vendor review requested re-testing every "not available" and "advertised" claim. No schema or routing changes.
+
+### Verified (previously advertised-only)
+
+- **`company_details.scope` blocks verified in a live paid response** (gated through the enrichment precheck envelope; one $0.25 call, dedupe-eligible): `contacts` returns a contacts[] array with name/email/position/phone/LinkedIn profileUrl — **contact data is retrievable again via scope** after disappearing from the default response in June 2026; `altloc` returns under the response key `other_locations` (not 'altloc'); `tabs` returns `osha`, `benefits_health`, and `benefits_retirement` as top-level blocks — there is no 'tabs' key in the response. No DOT block was observed on a non-DOT risk, so DOT tab content remains unverified. Descriptions updated from "advertised, unverified" to verified-with-shape, including both scope-value/response-key mismatches.
+- **REST `/Search` naicslist re-probed with live NAICS ids** from filter(param=naicslist) in both integer and string form: totals unchanged (PA 184,495) — the WC-search NAICS exclusion is now backed by a same-day probe, not just the v1.1.3-era finding.
+- **The six no-lookup list params re-probed directly**: upstream filter returns "Invalid param" for featurelist/providerlist/accountantfirmlist/fundfamilylist/healthcarriergrouplist/insbrokerlist — confirming the enum exclusion against the live endpoint, not just metadata.
+- **No hidden DOT/NPO search mode**: datamode 3/4/5 all fall back to the WC universe (identical totals and WC-shaped result rows).
+
+### Fixed
+
+- `match.fein` documented as digits-only: '431851748' matches, '43-1851748' returns zero results (verified live).
+
 ## [1.3.0] — 2026-07-03
 
 Q3 2026 upstream refresh. Driven by XDate's June 23, 2026 "Q3 Search Menu Update" (dedicated DOT/NPO databases, reworked search menus) and a full re-audit of the upstream MCP surface: `tools/list` now advertises 13 tools (was 7 at the last audit), new SERFF filters, a `scope` parameter on company_details, a `datamode` benefits-search mode, and changed pricing metadata. Every schema addition below was either individually behavior-verified live on 2026-07-03 (result-count comparisons with/without each filter) or is explicitly labeled upstream-declared/unverified in its description — nothing ships as "verified" without a logged probe.
@@ -201,6 +216,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.1]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.1
 [1.3.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.0
 [1.2.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.2.0
 [1.1.9]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.9
