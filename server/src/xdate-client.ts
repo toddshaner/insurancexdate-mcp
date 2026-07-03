@@ -17,10 +17,16 @@
  *
  * Re-verified 2026-07-03 (post-Q3): the upstream MCP's WC mode (datamode=0) now
  * applies premium/mod filters but DIVERGES from REST — NJ premfrom=1M returned 2
- * via MCP vs 112 via REST; modfrom=1.2 returned 4,743 vs 5,609. REST remains
- * authoritative for WC. The MCP's datamode 1/2 (Form 5500 benefits) filters were
- * verified working the same day and are exposed via the benefits_search tool,
- * which passes through to the upstream MCP `search` with datamode locked to 1|2.
+ * via MCP vs 112 via REST; modfrom=1.2 returned 4,743 vs 5,609. Head-to-head
+ * cross-validation the same day showed the deeper problem: MCP dm0 searches a
+ * SMALLER WC universe than REST (NJ baseline 83,143 vs 98,651; renewal window
+ * 12,353 vs 15,085; classlist 8810: 2,550 vs 9,282; siclist 8051: 111 vs 136;
+ * countylist essex: 6,739 vs 7,413). MCP dm0's name/naicslist filters DO work
+ * (83,143 -> 1,208 / -> 900) but against that incomplete universe, so they are
+ * deliberately not exposed. REST remains authoritative for WC. The MCP's
+ * datamode 1/2 (Form 5500 benefits) filters were verified working the same day
+ * and are exposed via the benefits_search tool, which passes through to the
+ * upstream MCP `search` with datamode locked to 1|2.
  *
  * Both public methods always return a valid CallToolResult. Errors are converted to
  * isError-flagged content so the SDK never sees a malformed shape.

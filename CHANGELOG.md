@@ -4,6 +4,10 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] — 2026-07-03
+
+Doc-only: records the head-to-head REST-vs-MCP WC cross-validation that closes the "why not expose name/naicslist via the MCP path" question. MCP datamode 0 does filter on name (NJ 83,143 → 1,208) and naicslist (→ 900), but it searches a provably smaller WC universe than REST — NJ baseline 83,143 vs 98,651, renewal-window 12,353 vs 15,085, classlist 8810 2,550 vs 9,282, siclist 8051 111 vs 136, countylist essex 6,739 vs 7,413 (all probed 2026-07-03). Exposing those params would silently drop up to a sixth of the prospect pool (and ~3/4 on class-filtered queries). WC stays REST-only; NAICS-style targeting routes through siclist/industrylist; find-by-name stays on match. No schema or routing changes.
+
 ## [1.3.1] — 2026-07-03
 
 Documentation truth-up from an independent verification pass run the same day as 1.3.0, after a distrust-the-vendor review requested re-testing every "not available" and "advertised" claim. No schema or routing changes.
@@ -216,6 +220,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.2]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.2
 [1.3.1]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.1
 [1.3.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.0
 [1.2.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.2.0

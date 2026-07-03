@@ -74,7 +74,7 @@ async function main() {
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.3.1",
+    version: "1.3.2",
   });
   // Surface MCP protocol-level errors on stderr instead of swallowing them.
   server.server.onerror = (err) => console.error("insurancexdate MCP error:", err);
