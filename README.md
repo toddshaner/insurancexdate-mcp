@@ -8,17 +8,25 @@ Built on `@modelcontextprotocol/sdk` v1.29, Node 20+. Ships as both a pre-packag
 
 ## What it does
 
-Exposes seven tools to MCP clients:
+Exposes thirteen tools to MCP clients:
 
 | Tool | Cost | Purpose |
 |---|---|---|
 | `search` | Free | Workers'-comp prospect search by state, renewal window, class, SIC, industry, county, carriers, carrier groups, agents, PEO providers, premium range, mod range, employee band (0-9), policy options (AR / multi-state / PEO), additional-data filters (BENEFITS / DOT / NPO / OSHA / PEO) |
+| `benefits_search` | Free per upstream declaration | Form 5500 benefits-plan search via upstream MCP `datamode` 1 (retirement: participants, assets, commissions, provider name) or 2 (health/welfare: premiums, commission %, loss ratios, broker name; `fromdate`/`todate` filter the insurance renewal date). Only behavior-verified params exposed (see Q3 drift notes) |
 | `match` | Free | Find a specific business by at least one of `name[]` / `fein` / `phone` / `address[]`, optionally scoped by `state`. Routes to `/api2/Match`. No additional service required per XDate support; fuzzy lookup returns the highest-score match |
-| `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, industries, counties, agents, PEO providers. Policy options and additional-data options are fixed `search` enums, not filter lookups |
-| `company_details` | $0.25 | Full account detail by UID: `summary`, `details` (~77 fields incl. premium, payroll, mod, `signalScore`, `hazardGroup`), `carrier_history[]` (per-policy-term rows, multi-year multi-state), `_meta` field docs. `contacts`/`altloc` no longer returned upstream (see Upstream response notes) |
-| `talkpoints` | $0.10 | Prospecting talking points + percentile flags by UID |
-| `serff_search` | $0.05 | SERFF rate-filing search by `carrier_naic` (integer) + state + insurance type (TOI) + severity. Uses the upstream's documented parameter names |
-| `serff_filing` | $0.10 | Full SERFF filing detail by integer `filing_id` |
+| `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, industries, counties, agents, PEO providers, NAICS codes (for `serff_search` industry filters — not WC search), SERFF insurance-type (TOI) codes, SERFF severity-type categories (response-side reference). Policy options and additional-data options are fixed `search` enums, not filter lookups |
+| `company_details` | $0.25 (gated) | Full account detail by UID: `summary`, `details` (~77 fields incl. premium, payroll, mod, `signalScore`, `hazardGroup`), `carrier_history[]` (per-policy-term rows, multi-year multi-state), `_meta` field docs. Optional `scope` blocks (`contacts`/`altloc`/`tabs`/`comments`) upstream-advertised 2026-07-03, unverified in a paid response. Upstream declares 90-day same-company dedupe free (unverified) |
+| `talkpoints` | $0.10 (gated) | Prospecting talking points + percentile flags by UID. Upstream declares 90-day dedupe free (unverified) |
+| `serff_search` | Upstream-declared free 2026-07-03, unconfirmed (was $0.05) — still gated | SERFF rate-filing search. `carrier_naic` now optional (statewide all-carrier queries verified); severity comma-lists, `policyholders_min`, `industry_naic_prefix`, `naics3` verified 2026-07-03; `industry_naic`, `policyholders_max` upstream-declared |
+| `serff_filing` | $0.10 (gated) | Full SERFF filing detail by integer `filing_id`. Upstream declares 90-day dedupe free (unverified) |
+| `flagged_companies` | Free per upstream declaration | List companies you or your agency flagged (save / contacted / quoting / written / nextyear / followup / appt), with sort + pagination. Behavior-probed 2026-07-03 |
+| `groups` | Free per upstream declaration | List saved company groups, incl. groups shared by agency members. Behavior-probed 2026-07-03 |
+| `group_companies` | Upstream-declared free, unverified — gated | Companies in a saved group (search-format results). Executes stored account content; could not be behavior-verified (no saved groups existed to probe) |
+| `saved_searches` | Free per upstream declaration | List saved prospect-search definitions. Behavior-probed 2026-07-03 |
+| `run_saved_search` | Upstream-declared free, unverified — gated | Execute a saved search by id (search-format results). Executes a stored definition the wrapper cannot inspect; could not be behavior-verified (no saved searches existed to probe) |
+
+The upstream write tools `set_flag` and `add_note` are intentionally **not** exposed: they mutate account state shared agency-wide (flags and notes propagate to sub-accounts). Exposing them would require an explicit opt-in write gate first.
 
 ## Architecture
 
@@ -34,15 +42,16 @@ MCP client (Claude Desktop, Cursor, Continue, Zed, custom...)
         │     frommod/tomod/pagelimit/pageon)
         │
         ├──► /api2/Match    (REST)   for `match`
-        │     find-by-name endpoint (the upstream MCP's `name` param on
-        │     `search` is silently dropped at REST, so `/Match` is the
-        │     correct route for find-by-identifier lookups)
+        │     find-by-name endpoint (the REST `/Search` endpoint ignores
+        │     `name`/`city`/`zipcode` — re-verified 2026-07-03 — so `/Match`
+        │     is the correct route for find-by-identifier lookups)
         │
         └──► /api2/McpData  (MCP)    for `filter`, `company_details`,
-              `talkpoints`, `serff_search`, `serff_filing`
-              passes parameters through using the upstream MCP's
-              documented schema (carrier_naic / insurance_type /
-              severity for serff_search)
+              `talkpoints`, `serff_search`, `serff_filing`,
+              `benefits_search` (upstream `search` with datamode locked
+              to 1|2), `flagged_companies`, `groups`, `group_companies`,
+              `saved_searches`, `run_saved_search` — passes parameters
+              through using the upstream MCP's documented schema
 ```
 
 The split exists because the upstream MCP at `/api2/McpData` and the REST endpoint at `/api2/Search` use different parameter naming conventions and have different filter behavior on prospect search. This wrapper bridges both surfaces with a consistent client-facing schema.
@@ -54,7 +63,7 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 - **`structuredContent`:** `search` and `match` return both `content` (text JSON fallback) and typed `structuredContent` so LLMs can reason over records without re-parsing
 - **URL-decode for UIDs:** company UIDs from `/api2/Search` come URL-encoded (`%2B`, `%2F`); wrapper decodes before forwarding to upstream MCP for paid lookups, which expect raw `+`/`/`
 - **Schema validation:** zod-validated input on every tool (state codes uppercase regex, dates MM-DD regex, premium/mod numeric, employee band 0-9, addloptions/policyoptions enum)
-- **Paid-tool gate:** set `XDATE_DISABLE_PAID=1` (also accepts `true` / `yes` / `on` / `enabled`, case-insensitive) in env to short-circuit `company_details`, `talkpoints`, `serff_search`, `serff_filing` with `isError` responses. Any other non-empty value leaves paid tools enabled and logs a startup warning to stderr. Defense-in-depth for environments where you want to whitelist free tools only
+- **Gated-tool switch:** set `XDATE_DISABLE_PAID=1` (also accepts `true` / `yes` / `on` / `enabled`, case-insensitive) in env to short-circuit the six gated tools — `company_details` ($0.25), `talkpoints` ($0.10), `serff_filing` ($0.10), `serff_search` (upstream-declared free 2026-07-03, unconfirmed), `group_companies` and `run_saved_search` (unverified stored-content executors) — with `isError` responses. Any other non-empty value leaves gated tools enabled and logs a startup warning to stderr. The seven always-free tools (`search`, `match`, `filter`, `benefits_search`, `flagged_companies`, `groups`, `saved_searches`) stay enabled; note the account-read tools among them still expose agency flag/pipeline lists to any connected client
 - **Sensitive credential storage:** when installed via `.mcpb` on Claude Desktop, the API key flows through `user_config.api_key` with `"sensitive": true` and is stored in the OS keychain (Windows Credential Manager / macOS Keychain). On other MCP clients the server reads `INSURANCEXDATE_API_KEY` from `process.env`, so use whatever secret-handling pattern your client supports (env-var injection, secret store, etc.) — never hard-code keys in JSON config files committed to source control
 
 ## Install
@@ -169,13 +178,33 @@ search(
 match(state="PA", name=["Acme Logistics", "Acme Logistics Inc"])
 ```
 
-**Pull rate filings for Berkley Casualty in IL, workers' comp only, severity 4:**
+**Pull rate filings for Berkley Casualty in IL, workers' comp only, broker-attack severity range:**
 
 ```
-serff_search(carrier_naic=15911, state="IL", insurance_type="16.0", severity="4")
+serff_search(carrier_naic=15911, state="IL", insurance_type="16.0", severity="4,5")
 ```
 
-The `severity` filter is **exact-match, not a threshold**: `severity="4"` returns only severity-4 filings, not 4 and 5. To capture both 4 and 5 (the broker-attack range), call twice and merge response-side, or omit `severity` entirely and filter the response client-side.
+The `severity` filter takes a single value or a comma-separated list (verified server-side 2026-07-03: PA WC `severity="3,4,5"` returned 204 filings vs 105 for `"4"` alone). A single value is still exact-match, not a threshold.
+
+**Statewide market scan — all carriers' WC filings hitting Construction, market-moving only:**
+
+```
+serff_search(state="PA", insurance_type="16.0", industry_naic_prefix=["23"], policyholders_min=1000)
+```
+
+`carrier_naic` is optional since Q3 2026 — statewide all-carrier queries verified working 2026-07-03.
+
+**Mid-size 401(k) plans in NJ for retirement prospecting (free):**
+
+```
+benefits_search(datamode=1, statelist=["NJ"], partmin=50, partmax=500, assetmin=1000000)
+```
+
+**Health plans with a poor loss ratio renewing soon (renewal-increase wedge):**
+
+```
+benefits_search(datamode=2, statelist=["TX"], lossratiomin=85, fromdate="07-03", todate="10-01")
+```
 
 ## State-data coverage
 
@@ -188,13 +217,24 @@ InsuranceXDate's data depth varies by state. Some filters only have data to oper
 
 Outside these footprints the corresponding filters have no data to operate on. This is upstream data availability, not a wrapper limitation.
 
-## Upstream response notes (observed 2026-06-12)
+## Upstream response notes (observed 2026-06-12, reconciled with Q3 metadata 2026-07-03)
 
-XDate revises its response surfaces without versioning or notice. Three things to know as of the Q2 2026 platform release:
+XDate revises its response surfaces without versioning or notice. Three things to know from the Q2 2026 platform release, each updated where the Q3 metadata changed the picture:
 
-- **`company_details` envelope changed.** The response is now `{ summary, user_status, details, carrier_history, _meta }` (previously `{ status, data: { details, contacts, carriers, altloc } }`). `carriers` became `carrier_history` (full per-policy-term rows, each carrying the same ~77 fields as `details` — hundreds of rows for multi-state operators, easily 1-2 MB). **`contacts` and `altloc` are no longer returned.** New fields include `signalScore`, `hazardGroup`, and a `_meta` block documenting each field. The wrapper passes all of this through unmodified by design.
+- **`company_details` envelope changed.** The default response is `{ summary, user_status, details, carrier_history, _meta }` (previously `{ status, data: { details, contacts, carriers, altloc } }`). `carriers` became `carrier_history` (full per-policy-term rows, each carrying the same ~77 fields as `details` — hundreds of rows for multi-state operators, easily 1-2 MB). `contacts` and `altloc` stopped returning in the default response as of the 2026-06-12 verification; **the Q3 metadata (2026-07-03) now advertises them as opt-in `scope` blocks** (plus `tabs` and `comments`) — advertised, unverified in a paid response. See Q3 2026 upstream drift notes below.
 - **Free-tier field masking on `search`/`match` results.** `name`, `fein`, `location`, `expyear`, `carrier`, and `carriergroup` return the literal string `"available"` — present-but-withheld markers, not values. Don't treat `"available"` as data; pull `company_details` for real values.
-- **The Q2 2026 DOT and NPO datasets are platform-UI only.** DOT safety inspections, crashes, cargo types, and NPO IRS-990 financials announced in June 2026 do not appear in any API response. The `addloptions` `NPO` flag does filter server-side, but it matches companies with *linked* 990 data — including for-profit companies with affiliated foundations — and search results carry no per-record `npo` flag.
+- **The Q2 2026 DOT and NPO datasets did not appear in any API response as of the 2026-06-12 verification.** The Q3 metadata now advertises a `tabs` scope block on `company_details` (DOT trucking / OSHA / Form 5500) — unverified, and DOT content may additionally require the vendor's enhanced-search add-on. The `addloptions` `NPO` flag does filter server-side, but it matches companies with *linked* 990 data — including for-profit companies with affiliated foundations — and search results carry no per-record `npo` flag.
+
+## Q3 2026 upstream drift notes (verified 2026-07-03)
+
+XDate shipped a ["Q3 Search Menu Update"](https://www.insurancexdate.com/2026/06/23/q3-searchmenu/) on June 23, 2026: dedicated DOT (~1.2M filings) and NPO (~556K orgs) databases and reworked search menus. What that means for this wrapper, verified against the live API:
+
+- **The dedicated DOT/NPO databases are not API-exposed.** Upstream `tools/list` has no DOT or NPO search mode (`datamode` covers only 0=WC, 1=retirement, 2=health), and the vendor KB gates DOT targeting search ("Target by DOT carrier, number of drivers or units") behind an *enhanced search add-on*. The `addloptions` DOT/NPO flags on `search` remain the API-side signal.
+- **The upstream MCP's tool count grew from 7 to 13.** This wrapper now covers all 11 read tools and deliberately excludes the 2 write tools (`set_flag`, `add_note`).
+- **The upstream MCP's WC search mode is still not trustworthy.** It now *partially* applies premium/mod filters but diverges from REST (verified 2026-07-03: NJ `premfrom=1M` → 2 via MCP vs 112 via REST; `modfrom=1.2` → 4,743 vs 5,609). WC search stays on the REST endpoint. The benefits modes (datamode 1/2) verified clean and are exposed via `benefits_search`.
+- **Declared ≠ honored.** Upstream declares `city`/`zipcode` on its search schema, but live probes show they do not filter (dm1, 2026-07-03) — not exposed here. `planyear` returned the identical baseline for 2020/2023/2024 (unhonored); `inscommpmin`/`inscommpmax` return 0 rows for any positive bound in both NJ and TX (no usable data); `lossratiomax` is internally inconsistent (removed 1 record at 90 while `lossratiomin=95` proves ≥107 records above 90) — none exposed. Several benefits list params (`featurelist`, `providerlist`, `accountantfirmlist`, `fundfamilylist`, `healthcarriergrouplist`, `insbrokerlist`) are declared with "use the filter tool" guidance, but the filter tool rejects those lookups — no value-discovery path, not exposed. The health `instypelist` (HMO/PPO) collides with the filter tool's `instypelist` (SERFF TOI codes) — a value-domain inconsistency we document rather than inherit.
+- **Pricing metadata changed.** Upstream now declares `serff_search` free (was $0.05) and 90-day same-record dedupe (repeat calls free) on `company_details`, `talkpoints`, and `serff_filing`. None of this is billing-receipt-confirmed, so `serff_search` stays behind the `XDATE_DISABLE_PAID` gate and dedupe claims are labeled unverified.
+- **Account workflow tools** (`flagged_companies`, `groups`, `saved_searches` — plus gated `group_companies`, `run_saved_search`) surface the flag/group/saved-search workflows from the web UI, read-only.
 
 ## SERFF response notes
 
@@ -253,7 +293,7 @@ If you're building an automated pipeline that depends on the full per-tier table
 
 ```
 .
-├── manifest.json             # .mcpb manifest (Node type, user_config keychain, 7 tools)
+├── manifest.json             # .mcpb manifest (Node type, user_config keychain, 13 tools)
 ├── .mcpbignore               # excludes src/, devDeps, source maps from the bundle
 ├── LICENSE                   # MIT
 ├── README.md                 # this file

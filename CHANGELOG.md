@@ -4,6 +4,31 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-07-03
+
+Q3 2026 upstream refresh. Driven by XDate's June 23, 2026 "Q3 Search Menu Update" (dedicated DOT/NPO databases, reworked search menus) and a full re-audit of the upstream MCP surface: `tools/list` now advertises 13 tools (was 7 at the last audit), new SERFF filters, a `scope` parameter on company_details, a `datamode` benefits-search mode, and changed pricing metadata. Every schema addition below was either individually behavior-verified live on 2026-07-03 (result-count comparisons with/without each filter) or is explicitly labeled upstream-declared/unverified in its description — nothing ships as "verified" without a logged probe.
+
+### Added
+
+- **`benefits_search`** — Form 5500 retirement (datamode 1) and health/welfare (datamode 2) plan search via upstream-MCP passthrough. datamode is schema-locked to 1|2: the upstream MCP's WC mode now *partially* applies premium/mod filters but diverges from REST (NJ premfrom=1M: 2 via MCP vs 112 via REST; modfrom=1.2: 4,743 vs 5,609 — verified 2026-07-03), so WC stays on the REST-backed `search`. Every exposed filter was individually behavior-verified live 2026-07-03 (NJ baselines dm1 29,183 / dm2 1,884): partmin → 514, partmax → 14,506, assetmin → 416, assetmax → 8,191, commmin → 5,843, commmax → 24,178, provname 'fidelity' → 520, name 'school' → 277 (dm1) / 46 (dm2), inspremmin → 1,015, inspremmax → 495, lossratiomin → 340 at 50 / 107 at 95, brokername 'aon' → 60, fromdate/todate 07-03..08-01 → 86. Declared-but-broken upstream params are deliberately NOT exposed, each with probe evidence: city/zipcode (no filtering, dm1), planyear (2020/2023/2024 all returned the identical baseline), inscommpmin/inscommpmax (any positive bound → 0 rows in NJ and TX; min=0 → full baseline, i.e. no usable data), lossratiomax (removed 1 record at 90 while lossratiomin=95 proves ≥107 records above 90 — inconsistent). List params with no API value-discovery path (featurelist, providerlist, accountantfirmlist, fundfamilylist, healthcarriergrouplist, insbrokerlist, the HMO/PPO instypelist) are also not exposed — the silent-no-op trap class this repo documents.
+- **Account workflow tools (read-only):** `flagged_companies`, `groups`, `saved_searches` (free per upstream declaration, behavior-probed 2026-07-03, ungated) and `group_companies`, `run_saved_search` (upstream declares free, but they execute stored account content that could not be behavior-verified — this account had no saved groups/searches to probe — so both ship behind the XDATE_DISABLE_PAID gate until observed-free evidence exists). The upstream write tools `set_flag` and `add_note` are intentionally NOT exposed: they mutate account state shared agency-wide; adding them would require an explicit opt-in write gate first.
+- **`serff_search` Q3 filters:** `industry_naic_prefix` (PA all-filings 1,878 → 641 with ['23'], verified), `naics3` (→ 526 with ['236'], verified), `policyholders_min` (PA WC 369 → 54 at 1000, verified), plus `industry_naic` and `policyholders_max` (upstream-declared 2026-07-03, not individually behavior-verified — labeled as such in the schema).
+- **`company_details.scope`** — optional data-block selector (details/carriers/contacts/altloc/tabs/comments), upstream-advertised 2026-07-03, not yet verified in a paid response. Supersedes the 2026-06-12 observation that contacts/altloc stopped returning: they are now advertised as opt-in scope blocks. The 'tabs' block advertises DOT/OSHA/Form-5500 content; DOT may additionally require the vendor's enhanced-search add-on.
+- Smoke test now asserts: 13-tool exact list, manifest.json tools[] name sync (guards the v1.1.3 stale-manifest class), exact param sets for search (21) / benefits_search (18) / serff_search (11), the 11-value filter enum, benefits_search limit cap 100, and the existing search limit cap 50 + triple-version agreement.
+
+### Changed
+
+- **`serff_search.carrier_naic` is now optional** — statewide all-carrier queries verified working 2026-07-03 (PA + insurance_type=16.0 alone → 369 filings). Previously required, which foreclosed a real query class.
+- **`serff_search.severity` accepts comma-separated lists** — verified 2026-07-03: PA WC severity '3,4,5' → 204 vs '4' alone → 105. The old "call twice and merge" guidance is obsolete and removed from docs.
+- **`filter` enum grew to 11 params:** added `naicslist` (candidate value source for serff_search's industry filters — still NOT accepted by WC search, where the REST endpoint ignores NAICS, re-verified 2026-07-03), `instypelist` (SERFF TOI codes for serff_search.insurance_type; NOT the benefits HMO/PPO field, which has no API lookup — an upstream value-domain inconsistency we document rather than inherit), and `severitylist` (reference for the response-side severity_types values; not an accepted argument anywhere).
+- **Pricing metadata updates (upstream tools/list, 2026-07-03):** upstream now declares serff_search free (was $0.05) and declares 90-day same-record dedupe (repeat calls free) on company_details, talkpoints, and serff_filing. None of this is confirmed by a billing receipt, so serff_search stays behind the XDATE_DISABLE_PAID gate and every dedupe mention is labeled unverified. The paid-disabled message, manifest safety-switch text, CONTRIBUTING, and README all now carry the 7-free/6-gated split.
+- Q3 2026 DOT/NPO reality documented: the dedicated DOT/NPO databases from the June 23, 2026 vendor update are not API-exposed (no DOT/NPO search mode in upstream tools/list as of 2026-07-03; vendor KB gates DOT targeting search behind an "enhanced search add-on"). The `addloptions` DOT/NPO flags remain the API-side signal.
+- Scrubbed remaining internal workflow jargon from the public `match` description.
+
+### Verification probes (2026-07-03, result-count comparisons, no payloads retained)
+
+REST /api2/Search re-probed: name/city/zipcode still ignored (PA total 184,495 unchanged) — `match` remains the find-by-name route. Upstream MCP datamode and SERFF filter probes as itemized above. All probed endpoints are $0/free per upstream declaration; the 7 serff_search probes predate the gating decision and would cost at most $0.35 total if upstream's free declaration proves wrong.
+
 ## [1.2.0] — 2026-06-12
 
 Driven by two inputs: a full multi-dimension external code review of the wrapper (43 confirmed findings after adversarial verification), and live verification of XDate's Q2 2026 platform release ("DOT & Non-Profit Orgs", announced 2026-06-07) against the API.
@@ -176,6 +201,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.0
 [1.2.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.2.0
 [1.1.9]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.9
 [1.1.8]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.1.8

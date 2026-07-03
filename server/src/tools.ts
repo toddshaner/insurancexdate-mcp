@@ -1,18 +1,24 @@
 /**
  * XDate tool definitions and handlers.
  *
- * Seven tools exposed by the wrapper. The `search` and `match` tools route
- * to REST endpoints with translated params where needed. The other five
+ * Thirteen tools exposed by the wrapper. The `search` and `match` tools route
+ * to REST endpoints with translated params where needed. The other eleven
  * pass through to the upstream MCP unchanged.
  *
- * Pricing (per XDate billing):
- *   search          - Free
- *   match           - Free
- *   filter          - Free
- *   serff_search    - $0.05
- *   talkpoints      - $0.10
- *   serff_filing    - $0.10
- *   company_details - $0.25
+ * Pricing (XDate billing history + upstream tools/list metadata 2026-07-03):
+ *   search            - Free
+ *   match             - Free
+ *   filter            - Free
+ *   benefits_search   - Free per upstream declaration ($0/call)
+ *   flagged_companies - Free per upstream declaration (behavior-probed 2026-07-03)
+ *   groups            - Free per upstream declaration (behavior-probed 2026-07-03)
+ *   saved_searches    - Free per upstream declaration (behavior-probed 2026-07-03)
+ *   group_companies   - upstream declares free; GATED (unverifiable stored-content executor)
+ *   run_saved_search  - upstream declares free; GATED (unverifiable stored-content executor)
+ *   serff_search      - upstream now declares free (was $0.05); GATED pending billing receipt
+ *   talkpoints        - $0.10 (upstream declares 90-day same-company dedupe free)
+ *   serff_filing      - $0.10 (upstream declares 90-day same-filing dedupe free)
+ *   company_details   - $0.25 (upstream declares 90-day same-company dedupe free)
  *
  * Schemas are typed as Record<string, z.ZodTypeAny> at export to avoid TS2589
  * (deep type instantiation) when registerTool inflates ShapeOutput<Args>.
@@ -77,6 +83,68 @@ export const SearchSchema: Shape = {
     .describe("Page number, 0-indexed. WORKS - translated to pageon; pageon=N returns records N*limit onward (resultstats.offset echoes N*limit). Omit or pass 0 for the first page. Verified live 2026-06-12: default echoed offset 0, pageon=1 echoed offset 5 at limit 5, pageon=2 echoed offset 10."),
 };
 
+/**
+ * benefits_search passes through to the upstream MCP `search` tool with
+ * datamode forced to 1 or 2. datamode 0 (workers' comp) is deliberately NOT
+ * expressible here: the upstream MCP's WC mode diverges from the REST
+ * endpoint (verified 2026-07-03: NJ premfrom=1M returned 2 via MCP vs 112 via
+ * REST; modfrom=1.2 returned 4,743 vs 5,609) — WC search stays on the
+ * REST-backed `search` tool.
+ *
+ * Only params that were individually behavior-verified live (or are pure
+ * pagination) are exposed. Declared-but-broken params exist upstream (all
+ * probed live 2026-07-03, NJ/TX result-count comparisons):
+ *   - city/zipcode: declared but did not filter (dm1)
+ *   - planyear: 2020/2023/2024 all returned the identical 29,183 baseline
+ *   - inscommpmin/inscommpmax: any positive bound returns 0 everywhere
+ *     (min=0 returns the full baseline, so the field has no usable data)
+ *   - lossratiomax: removed 1 record at 90 while lossratiomin=95 proves
+ *     >= 107 records sit above 90 — inconsistent, unusable
+ * Shipping those would be a silent no-op/zero-op trap. List params with no
+ * API value-discovery path (featurelist, providerlist, accountantfirmlist,
+ * fundfamilylist, healthcarriergrouplist, insbrokerlist) and the HMO/PPO
+ * instypelist (the filter tool's instypelist returns SERFF TOI codes — a
+ * different value domain) are also not exposed.
+ */
+export const BenefitsSearchSchema: Shape = {
+  datamode: z.union([z.literal(1), z.literal(2)])
+    .describe("REQUIRED. 1 = retirement plans (401k/pension from Form 5500: filter by participants, assets, commissions, provider/accountant names). 2 = health/welfare plans (medical/dental/life from Form 5500: filter by insurance premiums, commission %, loss ratios, broker name). Workers' comp is NOT available here — use the `search` tool."),
+  statelist: z.array(STATE_CODE).optional()
+    .describe("Two-letter state codes, uppercase, e.g. ['NJ']. Verified server-side 2026-07-03."),
+  name: z.string().optional()
+    .describe("Company name search, partial match. Verified server-side on datamode 1 2026-07-03 (NJ 29,183 -> 277 for 'school'); datamode 2 verified same day."),
+  fromdate: MM_DD.optional()
+    .describe("Window start, MM-DD. On datamode 2 filters the insurance renewal date (insxdate) per upstream docs; datamode 1 semantics undocumented upstream. Behavior-verified on datamode 2 2026-07-03."),
+  todate: MM_DD.optional()
+    .describe("Window end, MM-DD. See fromdate."),
+  partmin: z.number().int().optional()
+    .describe("Minimum plan participants. Verified server-side on datamode 1 2026-07-03 (NJ 29,183 -> 514 at 1000)."),
+  partmax: z.number().int().optional()
+    .describe("Maximum plan participants. Verified server-side 2026-07-03 (NJ 29,183 -> 14,506 at 10)."),
+  assetmin: z.number().int().optional()
+    .describe("[Retirement] Minimum total plan assets, dollars. Verified server-side on datamode 1 2026-07-03 (NJ 29,183 -> 416 at $100M)."),
+  assetmax: z.number().int().optional()
+    .describe("[Retirement] Maximum total plan assets, dollars. Verified server-side 2026-07-03 (NJ 29,183 -> 8,191 at $100K)."),
+  commmin: z.number().int().optional()
+    .describe("[Retirement] Minimum commission dollars. Verified server-side 2026-07-03 (NJ 29,183 -> 5,843 at $10K)."),
+  commmax: z.number().int().optional()
+    .describe("[Retirement] Maximum commission dollars. Verified server-side 2026-07-03 (NJ 29,183 -> 24,178 at $10K)."),
+  inspremmin: z.number().int().optional()
+    .describe("[Health] Minimum insurance premium, dollars. Verified server-side on datamode 2 2026-07-03 (NJ 1,884 -> 1,015 at $1M)."),
+  inspremmax: z.number().int().optional()
+    .describe("[Health] Maximum insurance premium, dollars. Verified server-side 2026-07-03 (NJ 1,884 -> 495 at $100K)."),
+  lossratiomin: z.number().optional()
+    .describe("[Health] Minimum loss ratio percentage. Verified server-side on datamode 2 2026-07-03 (NJ 1,884 -> 340 at 50, -> 107 at 95). High loss ratio = renewal-increase wedge. Note: only lossratioMIN is exposed — the upstream lossratiomax proved inconsistent in live probes and commission-% filters returned zero rows for any positive bound, so those are not exposed."),
+  provname: z.string().optional()
+    .describe("[Retirement] Service-provider name search, partial match. Verified server-side 2026-07-03 (NJ 29,183 -> 520 for 'fidelity')."),
+  brokername: z.string().optional()
+    .describe("[Health] Broker name search, partial match. Verified server-side 2026-07-03 (NJ 1,884 -> 60 for 'aon')."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Records per page, 1-100 (default 50) per upstream schema 2026-07-03."),
+  offset: z.number().int().min(0).optional()
+    .describe("RECORDS TO SKIP (record-skip pagination per upstream schema 2026-07-03) — NOT the page number used by the WC `search` tool. Page with offset 0, 50, 100... at limit 50; compare _meta.pagination.total to know when to stop."),
+};
+
 export const FilterSchema: Shape = {
   param: z.enum([
     "countylist",
@@ -87,8 +155,11 @@ export const FilterSchema: Shape = {
     "carriergrouplist",
     "agentlist",
     "peolist",
+    "naicslist",
+    "instypelist",
+    "severitylist",
   ])
-    .describe("Filter param to look up. One of: countylist, classlist, siclist, industrylist, carrierlist, carriergrouplist, agentlist, peolist. Note: naicslist was removed in v1.1.3 (the REST endpoint does not apply this filter; use industrylist or siclist instead). policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(): policyoptions ['AR','MULTISTATE','PEO'], addloptions ['BENEFITS','DOT','NPO','OSHA','PEO']."),
+    .describe("Filter param to look up. WC search params: countylist, classlist, siclist, industrylist, carrierlist, carriergrouplist, agentlist, peolist. SERFF params (added Q3 2026): naicslist = NAICS codes with descriptions, a candidate value source for serff_search's industry_naic / naics3 / industry_naic_prefix filters — NOT accepted by the WC search tool (the REST endpoint ignores NAICS, re-verified 2026-07-03; use industrylist or siclist for WC search); instypelist = SERFF insurance-type (TOI) codes like '16.0' Workers Comp for serff_search.insurance_type (NOT the benefits_search health plan-type field, which has no API lookup); severitylist = SERFF severity-type categories (RATE_CHANGE, MARKET_EXIT, ...) as a reference for the response-side severity_types values on serff_search filings — client-side post-fetch filter only, not an accepted argument (serff_search.severity takes numeric 1-5). policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups: policyoptions ['AR','MULTISTATE','PEO'], addloptions ['BENEFITS','DOT','NPO','OSHA','PEO']."),
   statelist: z.array(STATE_CODE).optional()
     .describe("Optional state filter (uppercase two-letter codes)"),
   search: z.string().optional()
@@ -110,6 +181,8 @@ export const MatchSchema: Shape = {
 
 export const CompanyDetailsSchema: Shape = {
   uid: z.string().describe("Company UID from search results"),
+  scope: z.array(z.enum(["details", "carriers", "contacts", "altloc", "tabs", "comments"])).optional()
+    .describe("Data blocks to include (upstream-advertised 2026-07-03, not yet verified in a paid response). Default ['details','carriers'] — note the 'carriers' scope value corresponds to the carrier_history response key. 'contacts' = key contacts with names/emails/phones; 'altloc' = other locations/branches; 'tabs' = DOT trucking / OSHA / Form-5500 blocks (DOT content may additionally require the vendor's enhanced-search add-on); 'comments' = notes and flag history."),
 };
 
 export const TalkpointsSchema: Shape = {
@@ -117,17 +190,66 @@ export const TalkpointsSchema: Shape = {
 };
 
 export const SerffSearchSchema: Shape = {
-  carrier_naic: z.number().int()
-    .describe("Carrier NAIC code (from company_details.carrierNaic). Integer, e.g. 15911 for Berkley Cas Co."),
+  carrier_naic: z.number().int().optional()
+    .describe("Carrier NAIC code (from company_details.carrierNaic). Integer, e.g. 15911 for Berkley Cas Co. OPTIONAL since Q3 2026 — statewide all-carrier queries verified working 2026-07-03 (PA + insurance_type alone returned 369 filings)."),
   state: STATE_CODE.optional().describe("Two-letter state code, uppercase, e.g. 'IL'"),
   insurance_type: z.string().optional()
-    .describe("Insurance type code (TOI). Top-level group format like '16.0' (Workers Comp), '20.0' (Commercial Auto), '05.0' (CMP). Sub-TOI format like '05.0001' (Builders Risk), '05.0002' (Businessowners). Verified working server-side 2026-04-26. Returns only filings matching the TOI."),
+    .describe("Insurance type code (TOI). Top-level group format like '16.0' (Workers Comp), '20.0' (Commercial Auto), '05.0' (CMP). Sub-TOI format like '05.0001' (Builders Risk), '05.0002' (Businessowners). Verified working server-side 2026-04-26. Discover codes via filter(param=instypelist). Returns only filings matching the TOI."),
   severity: z.string().optional()
-    .describe("Filing severity filter, '1' through '5'. Higher = more impactful. '4' and '5' are the broker-attack signal range. **Exact-match filter, not a threshold** — `severity='4'` returns only severity-4 filings, not 4 and 5. To capture both 4 and 5 (broker-attack range), call twice and merge response-side, or omit `severity` entirely and filter response-side. Verified working server-side 2026-04-26."),
+    .describe("Filing severity filter, '1' through '5'. Higher = more impactful; '4' and '5' are the broker-attack signal range. Single value OR comma-separated list — verified server-side 2026-07-03: PA WC severity '3,4,5' returned 204 filings vs 105 for '4' alone. A single value is still exact-match, not a threshold."),
+  industry_naic: z.array(z.number().int()).optional()
+    .describe("Exact-match NAICS codes tagged as affected by the filing (2-6 digit, e.g. 423310). Upstream-declared 2026-07-03, not individually behavior-verified — validate by comparing _meta.pagination.total with/without. Candidate value source: filter(param=naicslist)."),
+  industry_naic_prefix: z.array(z.string()).optional()
+    .describe("NAICS prefix match for sector queries (digits only, max 6; entries OR'd). Verified server-side 2026-07-03: PA all-filings 1,878 -> 641 with ['23'] (all Construction)."),
+  naics3: z.array(z.string()).optional()
+    .describe("3-digit NAICS subsector codes (the XRate web UI industry filter). Verified server-side 2026-07-03: PA 1,878 -> 526 with ['236'] (Construction of Buildings). OR'd with industry_naic / industry_naic_prefix."),
+  policyholders_min: z.number().int().optional()
+    .describe("Minimum policyholders affected — focus on broad, market-moving filings. Verified server-side 2026-07-03: PA WC 369 -> 54 at min=1000."),
+  policyholders_max: z.number().int().optional()
+    .describe("Maximum policyholders affected. Upstream-declared 2026-07-03, not individually behavior-verified. Upstream docs: filings with no reported policyholder count are excluded when either bound is set."),
   limit: z.number().int().min(1).max(50).optional()
     .describe("Results per page, 1-50. Default 20."),
   offset: z.number().int().min(0).optional()
     .describe("Pagination offset, 0-indexed. Default 0."),
+};
+
+export const FlaggedCompaniesSchema: Shape = {
+  type: z.enum(["save", "contacted", "quoting", "written", "nextyear", "followup", "appt"]).optional()
+    .describe("Filter by flag type: save (saved for later), contacted, quoting, written (won), nextyear (revisit next renewal), followup (scheduled, has appttime), appt (appointment, has appttime). Omit for all."),
+  search: z.string().optional()
+    .describe("Substring match against company name."),
+  sort_by: z.enum(["sort-appttime", "sort-id", "lastactsort", ".sortname", "sort-xdate"]).optional()
+    .describe("Sort key, values upstream-verbatim (the '.sortname' leading dot is intentional — it is the literal upstream value, do not 'fix' it). Default: sort-appttime for type=appt/followup, sort-id (newest flagged first) otherwise. lastactsort = last activity; .sortname = company name; sort-xdate = policy expiration."),
+  sort_dir: z.enum(["ASC", "DESC"]).optional()
+    .describe("Sort direction, default DESC."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Records per page, 1-100 (default 50) per upstream schema 2026-07-03."),
+  offset: z.number().int().min(0).optional()
+    .describe("Records to skip (record-skip pagination per upstream schema 2026-07-03 — not the WC search tool's page number)."),
+};
+
+export const GroupsSchema: Shape = {};
+
+export const GroupCompaniesSchema: Shape = {
+  group_name: z.string()
+    .describe("Exact group name, from the groups tool."),
+  owner_userid: z.number().int().optional()
+    .describe("User ID of the group owner. Only needed for shared groups; defaults to the calling user."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Records per page, 1-100 (default 50) per upstream schema 2026-07-03."),
+  offset: z.number().int().min(0).optional()
+    .describe("Records to skip (record-skip pagination per upstream schema 2026-07-03 — not the WC search tool's page number)."),
+};
+
+export const SavedSearchesSchema: Shape = {};
+
+export const RunSavedSearchSchema: Shape = {
+  id: z.number().int()
+    .describe("Saved search id, from the saved_searches tool."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Records per page, 1-100 (default 50) per upstream schema 2026-07-03."),
+  offset: z.number().int().min(0).optional()
+    .describe("Records to skip (record-skip pagination per upstream schema 2026-07-03 — not the WC search tool's page number)."),
 };
 
 export const SerffFilingSchema: Shape = {
@@ -157,20 +279,34 @@ type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>;
 
 export interface XdateHandlers {
   search: Handler;
+  benefits_search: Handler;
   match: Handler;
   filter: Handler;
   company_details: Handler;
   talkpoints: Handler;
   serff_search: Handler;
   serff_filing: Handler;
+  flagged_companies: Handler;
+  groups: Handler;
+  group_companies: Handler;
+  saved_searches: Handler;
+  run_saved_search: Handler;
 }
 
 /**
- * Emergency brake: if XDATE_DISABLE_PAID is a truthy string in env, paid tools
+ * Emergency brake: if XDATE_DISABLE_PAID is a truthy string in env, gated tools
  * return isError without hitting the network. Defense-in-depth for environments
  * where the client should only have access to free reads (e.g. evaluation,
  * demos, or untrusted MCP clients without their own confirmation gates).
- * Free tools (search, match, filter) are always enabled.
+ * Gated: the priced tools (company_details $0.25, talkpoints $0.10,
+ * serff_filing $0.10), serff_search (upstream re-declared it free 2026-07-03
+ * but that is unconfirmed by a billing receipt, so it stays gated), and the
+ * two stored-content executors (group_companies, run_saved_search — upstream
+ * declares them free, but they execute account content the wrapper cannot
+ * inspect and could not be behavior-verified, so they stay gated too).
+ * Always-free tools (search, match, filter, benefits_search, flagged_companies,
+ * groups, saved_searches) are always enabled — note the account-read tools
+ * still expose the agency's flag/pipeline lists to any connected client.
  *
  * Tolerant truthy parsing: accepts "1", "true", "yes", "on", "enabled"
  * (case-insensitive, whitespace-trimmed). A user setting a "safety switch"
@@ -207,7 +343,7 @@ const PAID_DISABLED_RESULT: CallToolResult = {
   content: [
     {
       type: "text",
-      text: "Paid XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the free `search`, `match`, and `filter` tools.",
+      text: "Gated XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search (upstream-declared free 2026-07-03, unconfirmed), group_companies and run_saved_search (unverified stored-content executors). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
     },
   ],
   isError: true,
@@ -264,23 +400,37 @@ function requireMatchIdentifier(handler: Handler): Handler {
 export function buildHandlers(client: XdateClient): XdateHandlers {
   return {
     search: (args) => client.search(args),
+    // benefits_search rides the upstream MCP `search` tool; datamode is
+    // schema-constrained to 1|2 so WC traffic can never take this path.
+    benefits_search: (args) => client.mcpPassthrough("search", args),
     match: requireMatchIdentifier((args) => client.match(args)),
     filter: (args) => client.mcpPassthrough("filter", args),
     company_details: gatePaid((args) => client.mcpPassthrough("company_details", args)),
     talkpoints: gatePaid((args) => client.mcpPassthrough("talkpoints", args)),
     serff_search: gatePaid((args) => client.mcpPassthrough("serff_search", args)),
     serff_filing: gatePaid((args) => client.mcpPassthrough("serff_filing", args)),
+    flagged_companies: (args) => client.mcpPassthrough("flagged_companies", args),
+    groups: (args) => client.mcpPassthrough("groups", args),
+    group_companies: gatePaid((args) => client.mcpPassthrough("group_companies", args)),
+    saved_searches: (args) => client.mcpPassthrough("saved_searches", args),
+    run_saved_search: gatePaid((args) => client.mcpPassthrough("run_saved_search", args)),
   };
 }
 
 // -------- Tool descriptions (used in registerTool calls) --------
 
 export const TOOL_DESCRIPTIONS = {
-  search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist is intentionally not supported because the upstream REST endpoint ignores it; use industrylist or siclist instead. Field masking (observed 2026-06-12): free search/match results return the literal string 'available' for name, fein, location, expyear, carrier, and carriergroup — treat that as 'present but withheld', not a value; real values require company_details.",
-  match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone/address (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for xdate-enrich Mode A workflows that look up a known prospect by name. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",
-  filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers. naicslist is intentionally not exposed because it is a no-op upstream. policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(). Free.",
-  company_details: "Full company details for a UID. Response shape (observed 2026-06-12): summary (markdown top-line), user_status (CRM-style flag, often null), details (~77 fields incl. premium, payroll, mod/renmod, carrier, agent, signalScore, hazardGroup), carrier_history[] (full per-policy-term rows across years and states — can run to hundreds of rows for multi-state operators), _meta (per-field documentation). contacts and altloc are NO LONGER returned (upstream removal observed 2026-06-12; previously present through April 2026). The Q2 2026 DOT inspection/crash/cargo and NPO 990 datasets are platform-UI only — NOT in this response. Cost: $0.25/call. Saving or caching forbidden by XDate terms.",
-  talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: $0.10/call. Saving or caching forbidden.",
-  serff_search: "Search SERFF rate filings. Uses carrier_naic integer, insurance_type, and severity. Server-side filters: carrier_naic, state, insurance_type (TOI like '16.0' for WC), severity (1-5). sentiment, severity_types, and sub_type are RESPONSE fields — filter the returned filings yourself; they are NOT accepted as tool arguments (undeclared args are silently dropped, the call still succeeds, and results come back unfiltered). Cost: $0.05/call.",
-  serff_filing: "Full SERFF filing details: narratives, coverage changes, actuarial justifications. Cost: $0.10/call. Saving or caching forbidden.",
+  search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist is intentionally not supported because the upstream REST endpoint ignores it (re-verified 2026-07-03); use industrylist or siclist instead. Field masking (observed 2026-06-12): free search/match results return the literal string 'available' for name, fein, location, expyear, carrier, and carriergroup — treat that as 'present but withheld', not a value; real values require company_details. Q3 2026 note: XDate's dedicated DOT/NPO databases (June 23, 2026 update) are not API-exposed — upstream tools/list has no DOT/NPO search mode (checked 2026-07-03) and the vendor KB gates DOT targeting search behind an 'enhanced search add-on'; the addloptions DOT/NPO flags remain the API-side signal. For Form-5500 retirement/health prospecting use benefits_search.",
+  benefits_search: "Search Form 5500 benefits-plan records (free per upstream declaration, $0/call). datamode 1 = retirement plans (401k/pension): filter by participants, plan assets, commissions, provider name. datamode 2 = health/welfare plans (medical/dental/life): filter by insurance premiums, commission %, loss ratios, broker name; fromdate/todate filter the insurance renewal date. Returns companies with UIDs for company_details/talkpoints. Server-side filtering behavior-verified 2026-07-03 (see per-param notes). Pagination: limit 1-100, offset = records to skip (NOT the page number the WC search tool uses). Workers' comp is deliberately not available here — the upstream MCP's WC mode diverges from the REST endpoint (verified 2026-07-03), so WC stays on the `search` tool. Free-tier field masking applies to results like WC search.",
+  match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone/address (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for looking up a known prospect by name before a detail pull. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",
+  filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers, NAICS codes (for serff_search industry filters — NOT for WC search, where the REST endpoint ignores NAICS), SERFF insurance-type (TOI) codes, and SERFF severity-type categories (response-side reference only). policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(). Free.",
+  company_details: "Full company details for a UID. Default response (observed 2026-06-12): summary (markdown top-line), user_status (CRM-style flag, often null), details (~77 fields incl. premium, payroll, mod/renmod, carrier, agent, signalScore, hazardGroup), carrier_history[] (full per-policy-term rows across years and states — can run to hundreds of rows for multi-state operators), _meta (per-field documentation). Q3 2026: upstream metadata (2026-07-03) advertises optional `scope` blocks — 'contacts' and 'altloc' (which had stopped returning in the 2026-06-12 default response) plus 'tabs' (DOT trucking/OSHA/Form-5500) and 'comments'; advertised, not yet verified in a paid response, and DOT tab content may additionally require the vendor's enhanced-search add-on. Cost: $0.25/call; upstream declares repeat calls for the same company within 90 days free (dedupe — declared 2026-07-03, unverified). Saving or caching forbidden by XDate terms.",
+  talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: $0.10/call; upstream declares repeat calls for the same company within 90 days free (dedupe — declared 2026-07-03, unverified). Saving or caching forbidden.",
+  serff_search: "Search SERFF rate filings. Server-side filters: carrier_naic (OPTIONAL since Q3 2026 — statewide all-carrier queries verified 2026-07-03), state, insurance_type (TOI like '16.0' for WC; discover via filter param=instypelist), severity ('1'-'5', single or comma-list like '3,4,5' — comma-list verified 2026-07-03), policyholders_min (verified 2026-07-03), industry_naic_prefix and naics3 (verified 2026-07-03), industry_naic and policyholders_max (upstream-declared, not individually behavior-verified). sentiment, severity_types, and sub_type are RESPONSE fields — filter the returned filings yourself; they are NOT accepted as tool arguments (undeclared args are silently dropped, the call still succeeds, and results come back unfiltered). Pricing: upstream metadata declares this tool free as of 2026-07-03 (previously $0.05/call); the wrapper keeps it behind the XDATE_DISABLE_PAID gate until a billing receipt confirms — treat as possibly-paid.",
+  serff_filing: "Full SERFF filing details: narratives, coverage changes, actuarial justifications. Cost: $0.10/call; upstream declares repeat calls for the same filing within 90 days free (dedupe — declared 2026-07-03, unverified). Saving or caching forbidden.",
+  flagged_companies: "List companies you (or your agency) have flagged. Flag types: save, contacted, quoting, written, nextyear, followup (has appttime), appt (has appttime). Returns UIDs usable with company_details/talkpoints. Free per upstream declaration; behavior-probed 2026-07-03. Note: exposes the agency's flag/pipeline list to any connected MCP client.",
+  groups: "List your saved company groups plus groups shared by other agency members. Groups are named buckets of companies for batch workflows. Call this before group_companies. Free per upstream declaration; behavior-probed 2026-07-03.",
+  group_companies: "Get the companies in a saved group (same result format as search: UIDs, city, state). Upstream declares this free (2026-07-03), but it executes stored account content the wrapper cannot inspect and could not be behavior-verified on this account (no saved groups existed to probe) — gated behind XDATE_DISABLE_PAID as a precaution until observed-free evidence exists.",
+  saved_searches: "List your saved prospect-search definitions (stored criteria with auto-update windows, created in the web UI). Call this before run_saved_search. Free per upstream declaration; behavior-probed 2026-07-03.",
+  run_saved_search: "Execute a saved search by id (same result format as search: UIDs, city, state). Upstream declares this free (2026-07-03), but it executes a stored search definition the wrapper cannot inspect — definitions are created in the web UI and may touch add-on surfaces — and could not be behavior-verified on this account (no saved searches existed to probe). Gated behind XDATE_DISABLE_PAID as a precaution until observed-free evidence exists.",
 };

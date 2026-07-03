@@ -19,12 +19,18 @@ import { XdateClient } from "./xdate-client.js";
 import {
   buildHandlers,
   SearchSchema,
+  BenefitsSearchSchema,
   MatchSchema,
   FilterSchema,
   CompanyDetailsSchema,
   TalkpointsSchema,
   SerffSearchSchema,
   SerffFilingSchema,
+  FlaggedCompaniesSchema,
+  GroupsSchema,
+  GroupCompaniesSchema,
+  SavedSearchesSchema,
+  RunSavedSearchSchema,
   TOOL_DESCRIPTIONS,
   warnIfDisablePaidUnrecognized,
 } from "./tools.js";
@@ -68,7 +74,7 @@ async function main() {
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.2.0",
+    version: "1.3.0",
   });
   // Surface MCP protocol-level errors on stderr instead of swallowing them.
   server.server.onerror = (err) => console.error("insurancexdate MCP error:", err);
@@ -113,7 +119,7 @@ async function main() {
 
   server.registerTool(
     "serff_search",
-    { title: "SERFF filing search (paid $0.05)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
+    { title: "SERFF filing search (gated; upstream-declared free, unconfirmed)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
     handlers.serff_search as AnyHandler,
   );
 
@@ -121,6 +127,42 @@ async function main() {
     "serff_filing",
     { title: "SERFF filing details (paid $0.10)", description: TOOL_DESCRIPTIONS.serff_filing, inputSchema: SerffFilingSchema as AnySchema },
     handlers.serff_filing as AnyHandler,
+  );
+
+  server.registerTool(
+    "benefits_search",
+    { title: "Benefits search (Form 5500 retirement/health)", description: TOOL_DESCRIPTIONS.benefits_search, inputSchema: BenefitsSearchSchema as AnySchema },
+    handlers.benefits_search as AnyHandler,
+  );
+
+  server.registerTool(
+    "flagged_companies",
+    { title: "List flagged companies", description: TOOL_DESCRIPTIONS.flagged_companies, inputSchema: FlaggedCompaniesSchema as AnySchema },
+    handlers.flagged_companies as AnyHandler,
+  );
+
+  server.registerTool(
+    "groups",
+    { title: "List saved company groups", description: TOOL_DESCRIPTIONS.groups, inputSchema: GroupsSchema as AnySchema },
+    handlers.groups as AnyHandler,
+  );
+
+  server.registerTool(
+    "group_companies",
+    { title: "Companies in a saved group (gated)", description: TOOL_DESCRIPTIONS.group_companies, inputSchema: GroupCompaniesSchema as AnySchema },
+    handlers.group_companies as AnyHandler,
+  );
+
+  server.registerTool(
+    "saved_searches",
+    { title: "List saved searches", description: TOOL_DESCRIPTIONS.saved_searches, inputSchema: SavedSearchesSchema as AnySchema },
+    handlers.saved_searches as AnyHandler,
+  );
+
+  server.registerTool(
+    "run_saved_search",
+    { title: "Run a saved search (gated)", description: TOOL_DESCRIPTIONS.run_saved_search, inputSchema: RunSavedSearchSchema as AnySchema },
+    handlers.run_saved_search as AnyHandler,
   );
 
   const transport = new StdioServerTransport();

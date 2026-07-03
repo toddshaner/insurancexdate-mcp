@@ -15,6 +15,13 @@
  *   MCP search with premfrom=10000000 returned pagination.total=33,353 (filter not applied).
  *   REST search with fromprem=10000000 returned 1 record (filter applied as documented).
  *
+ * Re-verified 2026-07-03 (post-Q3): the upstream MCP's WC mode (datamode=0) now
+ * applies premium/mod filters but DIVERGES from REST — NJ premfrom=1M returned 2
+ * via MCP vs 112 via REST; modfrom=1.2 returned 4,743 vs 5,609. REST remains
+ * authoritative for WC. The MCP's datamode 1/2 (Form 5500 benefits) filters were
+ * verified working the same day and are exposed via the benefits_search tool,
+ * which passes through to the upstream MCP `search` with datamode locked to 1|2.
+ *
  * Both public methods always return a valid CallToolResult. Errors are converted to
  * isError-flagged content so the SDK never sees a malformed shape.
  */
