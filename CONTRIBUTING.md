@@ -45,7 +45,7 @@ INSURANCEXDATE_API_KEY=your-key node dist/index.js
 
 The server speaks MCP on stdio. For interactive testing, point any MCP client at `dist/index.js` (see README's Install section). For non-interactive testing, pipe JSON-RPC requests via stdin.
 
-Always-free tools (`search`, `match`, `filter`, `benefits_search`, `flagged_companies`, `groups`, `saved_searches`) are safe to exercise. Gated tools may charge your XDate account: `company_details` ($0.25), `talkpoints` ($0.10), and `serff_filing` ($0.10) charge per call (upstream declares 90-day dedupe free, unverified); `serff_search` is upstream-declared free as of 2026-07-03 but unconfirmed by a billing receipt; `group_companies` and `run_saved_search` execute stored account content that could not be behavior-verified. Set `XDATE_DISABLE_PAID=1` to short-circuit all six gated tools with `isError` while you iterate.
+Always-free tools (`search`, `match`, `filter`, `benefits_search`, `flagged_companies`, `groups`, `saved_searches`) are safe to exercise. Gated tools may charge your XDate account: `company_details` ($0.25), `talkpoints` ($0.10), and `serff_filing` ($0.10) charge per call (upstream declares 90-day dedupe free, unverified); `serff_search` has conflicting vendor pricing as of 2026-07-03 ($0.05 per the official pricing page vs free per tools/list metadata) — treat it as paid at $0.05; `group_companies` and `run_saved_search` execute stored account content that could not be behavior-verified. Set `XDATE_DISABLE_PAID=1` to short-circuit all six gated tools with `isError` while you iterate.
 
 ## License
 

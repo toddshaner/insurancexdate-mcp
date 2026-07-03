@@ -4,6 +4,28 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] — 2026-07-03
+
+Hybrid-routing adversarial review outcome + vendor pricing-page reconciliation. Three-lens review (hybrid advocate / defense stress-test / docs reconciler) plus decisive paired probes settled the REST-vs-MCP question with data. No routing or schema changes — the current architecture won on evidence.
+
+### Verified
+
+- **DOT tab content verified on a live trucking risk via the existing MCP route**: `company_details(scope=['tabs'])` on a DOT-flagged company returns a `dot[]` block — one row per MCS-150 filing, 35 fields (US DOT #, Safety Rating, Power Units, Drivers, Mileage, Carrier Operation, Insurance Providers/Type, Max Coverage (x1000), Policy Num, ...). Previous "DOT unobserved" caveat applied only to non-DOT risks. No add-on gate encountered.
+- **REST `/api2/Company` probed head-to-head** (same UIDs, gated via the enrichment precheck envelope): full field-name parity on every shared block (details 46=46, dot 35=35, osha, retirement 69=69, health 50=50; contacts/carriers/altloc identical). MCP-only: summary, user_status, _meta, scope selectivity. REST-only: `tabs.related` (2 Form-5500 filing references). company_details stays MCP; REST documented as a contacts fallback.
+- **REST `/api2/Search/Filter` is silently empty** — well-formed envelope, zero results for all 12 param types that return real values via MCP filter. Documented as a trap; filter stays MCP.
+- details field-count varies by record: ~77 with signalScore/hazardGroup observed 2026-06-12; 46 (identical sets on both routes, no signalScore/hazardGroup) on the two records probed 2026-07-03. Descriptions now say "varies by record" instead of a fixed count.
+
+### Changed
+
+- **serff_search pricing: the vendor now contradicts itself in writing.** The official pricing page (checked 2026-07-03) lists $0.05/call while the upstream tools/list metadata (same day) declares it free. All wrapper text updated from "upstream-declared free, treat as possibly-paid" to the two-source conflict with paid-wins-for-safety ($0.05). Gate unchanged and further vindicated.
+- 90-day dedupe wording upgraded: now vendor-documented in TWO written sources (tools/list metadata + pricing page), still not billing-receipt-verified. Cross-surface dedupe (MCP + REST pulls of the same UID) explicitly flagged as unprobed.
+- set_flag/add_note exclusion rationale pinned: both are free per the pricing page; the exclusion is write-safety (agency-shared account state), not cost.
+- Fixed a stale README tool-table cell that still called scope blocks "unverified" after the 1.3.1 verification.
+
+### Rejected (with evidence, so it stays rejected)
+
+Full reroute of company_details to REST (loses summary/user_status/_meta and scope selectivity for zero field gain); filter reroute to REST (silently-empty endpoint); always-on dual-call merge (unreceipted cross-surface dedupe → worst case double spend); a separate REST opt-in tool (the only unique REST data is 2 opaque related-filing rows).
+
 ## [1.3.2] — 2026-07-03
 
 Doc-only: records the head-to-head REST-vs-MCP WC cross-validation that closes the "why not expose name/naicslist via the MCP path" question. MCP datamode 0 does filter on name (NJ 83,143 → 1,208) and naicslist (→ 900), but it searches a provably smaller WC universe than REST — NJ baseline 83,143 vs 98,651, renewal-window 12,353 vs 15,085, classlist 8810 2,550 vs 9,282, siclist 8051 111 vs 136, countylist essex 6,739 vs 7,413 (all probed 2026-07-03). Exposing those params would silently drop up to a sixth of the prospect pool (and ~3/4 on class-filtered queries). WC stays REST-only; NAICS-style targeting routes through siclist/industrylist; find-by-name stays on match. No schema or routing changes.
@@ -220,6 +242,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3
 [1.3.2]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.2
 [1.3.1]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.1
 [1.3.0]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.0
