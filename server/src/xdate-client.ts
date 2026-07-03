@@ -167,8 +167,12 @@ export class XdateClient {
 
   /**
    * Forward a tool call to upstream MCP at /api2/McpData unchanged.
-   * Used for filter, company_details, talkpoints, serff_search, serff_filing -
-   * all of which work correctly upstream and don't need the REST-proxy translation.
+   * Used for the eleven upstream-MCP tools (filter, company_details,
+   * talkpoints, serff_search, serff_filing, benefits_search — which rides the
+   * upstream `search` with datamode locked to 1|2 — flagged_companies, groups,
+   * group_companies, saved_searches, run_saved_search); none need the
+   * REST-proxy translation. group_companies and run_saved_search pass through
+   * but remain gated as unverified stored-content executors.
    * Always returns a valid CallToolResult: upstream success unwrapped, upstream
    * errors and network errors converted to isError-flagged text content.
    */
