@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] — 2026-07-03
+
+Pricing verified against the account's own billing counters instead of the vendor's published prices, after those proved unreliable (the pricing page and tools/list metadata disagreed on serff_search the same day). No schema or routing changes.
+
+### Verified (our own balance-delta test, not vendor claims)
+
+- **Discovered the live billing surface**: `GET /api2/Account` returns `apiBalance` (prepaid $) and `apiFreeMonthly` (included allowance). A run can now be bracketed (read balance → fire paid calls → read balance) so actual cost is observable — every prior enrichment receipt had to record cost as "projected, unobservable from the API."
+- **Nine paid-class calls moved neither counter.** Fresh, never-pulled `company_details` and `talkpoints` on a random TX company, plus fresh `serff_search` and `serff_filing`: each a $0.0000 delta. `apiBalance` held $32.0000, `apiFreeMonthly` held $5.0000, `mcpAccess`=0, `mcpMonthlyBudget`=null, before and after. No delayed in-session posting.
+- **Observed cost of every "paid" tool on this account is currently $0.00**, contradicting the published $0.25 / $0.10 / $0.05. Tool descriptions now state both the published price (retained as a caution ceiling) and the $0.00 observed figure, with the mechanism flagged unconfirmed.
+
+### Unchanged (deliberately)
+
+- All four gated tools stay gated. The mechanism behind the $0.00 is unconfirmed (subscription coverage vs unmetered vs off-ledger tracking vs `apiBalance` not being the charge ledger — it never moved, so it could not be positively confirmed as such), one clean pass is not a fixture-backed de-gate, and vendor metering could change. Published prices remain the worst-case ceiling.
+- `precheck_calls.py` PRICES table stays at the published figures — the gate must project worst-case, not observed-best-case.
+
 ## [1.3.3] — 2026-07-03
 
 Hybrid-routing adversarial review outcome + vendor pricing-page reconciliation. Three-lens review (hybrid advocate / defense stress-test / docs reconciler) plus decisive paired probes settled the REST-vs-MCP question with data. No routing or schema changes — the current architecture won on evidence.
@@ -242,6 +257,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.4
 [1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3
 [1.3.2]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.2
 [1.3.1]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.1
