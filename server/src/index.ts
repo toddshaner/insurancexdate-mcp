@@ -74,7 +74,7 @@ async function main() {
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.3.4",
+    version: "1.3.5",
   });
   // Surface MCP protocol-level errors on stderr instead of swallowing them.
   server.server.onerror = (err) => console.error("insurancexdate MCP error:", err);
@@ -119,7 +119,7 @@ async function main() {
 
   server.registerTool(
     "serff_search",
-    { title: "SERFF filing search (gated; vendor pricing conflict — treat as $0.05)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
+    { title: "SERFF filing search (paid $0.05, ledger-confirmed)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
     handlers.serff_search as AnyHandler,
   );
 

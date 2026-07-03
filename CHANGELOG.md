@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] — 2026-07-03
+
+Pricing corrected against the account's XChange usage ledger (per-call charge log in the web UI): the day's 14 ledger charges were reconciled against a known ~23-call sequence, superseding the v1.3.4 balance-delta interpretation. Two absences remain unexplained (a fresh talkpoints call and one company's REST pulls produced no charges) and are flagged below rather than smoothed over. Also broadened the DOT-tab guidance from "trucking" to DOT-flagged (fleet operators in any industry).
+
+### Corrected (v1.3.4's "$0.00 observed" was wrong)
+
+- **Charges are real and match the published prices** — they draw from a $5.00/month included allowance FIRST, then the XChange balance. `apiFreeMonthly` is the allowance size (static), not a remaining counter, so the v1.3.4 API balance bracket could not see them. The UI ledger is the authoritative per-call record.
+- **serff_search: $0.05/call LEDGER-CONFIRMED** (9 calls → 9 × $0.05 charges). The tools/list metadata's "FREE" declaration is disproven. Also **NO dedupe** — an identical same-day repeat was charged.
+- **Dedupe is same-day-verified only**: same-day same-record repeats of company_details (6+ calls → 3 charges, one per unique company) and serff_filing (2 calls → 1 charge) were free, but a company last pulled 57 days earlier WAS re-charged — the advertised 90-day window did not apply.
+- **Cross-surface billing is inconsistent, not cleanly dedupe-or-not**: two companies were pulled on both surfaces same-day, yet exactly one API-source Company charge posted — one company double-billed across surfaces while the other's REST pulls were free, and the ledger rows carry no company id to say which. Budget MCP and REST pulls of the same UID as separately billable.
+- **talkpoints**: $0.10 confirmed on prior-day (Jun 26-27) ledger rows; the one fresh Jul 3 talkpoints call produced NO visible ledger charge as of the readback — unresolved (posting lag or changed billing), flagged in the description for re-check.
+- All pricing/dedupe description text updated accordingly (tools.ts, manifest, README, CONTRIBUTING); serff_search title restored to "paid $0.05".
+
+### Changed
+
+- DOT-tab guidance de-narrowed: the `dot[]` block keys on the company's DOT FLAG (dot=1 on search results), not its industry. Pest-control, pool-care, landscaping, NEMT/healthcare-transport, and other fleet operators carry FMCSA registrations; descriptions now say never to skip 'tabs' because a prospect "isn't a trucking company".
+
 ## [1.3.4] — 2026-07-03
 
 Pricing verified against the account's own billing counters instead of the vendor's published prices, after those proved unreliable (the pricing page and tools/list metadata disagreed on serff_search the same day). No schema or routing changes.
@@ -257,6 +274,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.3.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.5
 [1.3.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.4
 [1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3
 [1.3.2]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.2

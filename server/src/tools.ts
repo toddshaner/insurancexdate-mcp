@@ -5,31 +5,45 @@
  * to REST endpoints with translated params where needed. The other eleven
  * pass through to the upstream MCP unchanged.
  *
- * Pricing. XDate's published prices are unreliable (their own pricing page and
- * tools/list metadata disagreed on serff_search, 2026-07-03), so the ground
- * truth is a live balance-delta test against the account's own counters
- * (GET /api2/Account -> apiBalance, apiFreeMonthly). VERIFIED 2026-07-03: nine
- * paid-class calls on this account — including FRESH, never-pulled
- * company_details and talkpoints, plus fresh serff_search and serff_filing —
- * moved neither counter (apiBalance held $32.0000, apiFreeMonthly held $5.0000;
- * mcpAccess=0, mcpMonthlyBudget=null). So on this account the observed cost of
- * every "paid" tool below is currently $0.00. The published prices are kept as
- * the CAUTION CEILING (worst case if the vendor flips metering, or if billing
- * posts on a delayed batch not seen in-session) and the tools stay gated:
- * mechanism unconfirmed and a single clean pass is not a fixture-backed gate.
- *   search            - Free
- *   match             - Free
- *   filter            - Free
- *   benefits_search   - Free ($0 observed + upstream-declared)
- *   flagged_companies - Free (behavior-probed 2026-07-03)
- *   groups            - Free (behavior-probed 2026-07-03)
- *   saved_searches    - Free (behavior-probed 2026-07-03)
+ * Pricing — LEDGER-VERIFIED 2026-07-03 against the account's XChange usage
+ * ledger (the per-call charge log in the web UI; the authoritative billing
+ * record). Key mechanics the API alone cannot show: every charge draws from a
+ * $5.00/month INCLUDED ALLOWANCE first, then from the prepaid XChange balance
+ * (GET /api2/Account's apiBalance). apiFreeMonthly is the allowance SIZE (a
+ * static $5.00), NOT a live remaining counter — so a balance-delta bracket via
+ * the API detects charges only after the allowance is exhausted; the UI ledger
+ * is the ground truth per call. Ledger findings (14 charges reconciled 1:1
+ * against a known call sequence):
+ *   - Published per-call prices are REAL and charge as listed.
+ *   - serff_search: $0.05 CONFIRMED (9 calls -> 9 charges — the tools/list
+ *     metadata's "FREE" claim is disproven), and NO dedupe (an identical
+ *     same-day repeat was charged).
+ *   - company_details/serff_filing: same-day same-record repeats were NOT
+ *     charged (dedupe confirmed at same-day granularity). BUT a company last
+ *     pulled 57 days earlier WAS re-charged — the advertised 90-day dedupe did
+ *     not apply. Treat dedupe as same-day-verified only.
+ *   - Cross-surface billing (REST /api2/Company vs MCP company_details) is
+ *     INCONSISTENT: of two companies pulled on both surfaces same-day, one
+ *     double-billed (an API charge posted alongside its MCP charge) and the
+ *     other produced no API charge at all. Budget MCP and REST pulls of the
+ *     same UID as separately billable; rely on cross-surface dedupe in
+ *     neither direction.
+ *   - talkpoints: $0.10 confirmed on prior-day (Jun 26-27) ledger rows, but
+ *     the one fresh Jul 3 talkpoints call produced NO visible charge as of
+ *     the readback — unresolved (posting lag or changed billing); re-check.
+ *   search            - Free (ledger-consistent: no charges)
+ *   match             - Free (no charges)
+ *   filter            - Free (no charges)
+ *   benefits_search   - Free (no charges for upstream `search`)
+ *   flagged_companies - Free (behavior-probed; no charges)
+ *   groups            - Free (behavior-probed; no charges)
+ *   saved_searches    - Free (behavior-probed; no charges)
  *   group_companies   - GATED (unverifiable stored-content executor)
  *   run_saved_search  - GATED (unverifiable stored-content executor)
- *   serff_search      - published $0.05 (pricing page) / free (metadata); OBSERVED $0.00 on this account; GATED
- *   talkpoints        - published $0.10; OBSERVED $0.00 on this account; GATED
- *   serff_filing      - published $0.10; OBSERVED $0.00 on this account; GATED
- *   company_details   - published $0.25; OBSERVED $0.00 on this account; GATED
+ *   serff_search      - $0.05 LEDGER-CONFIRMED, no dedupe; GATED
+ *   talkpoints        - $0.10 (see talkpoints bullet above); GATED
+ *   serff_filing      - $0.10 LEDGER-CONFIRMED, same-day dedupe; GATED
+ *   company_details   - $0.25 LEDGER-CONFIRMED, same-day dedupe only; GATED
  *
  * Schemas are typed as Record<string, z.ZodTypeAny> at export to avoid TS2589
  * (deep type instantiation) when registerTool inflates ShapeOutput<Args>.
@@ -193,7 +207,7 @@ export const MatchSchema: Shape = {
 export const CompanyDetailsSchema: Shape = {
   uid: z.string().describe("Company UID from search results"),
   scope: z.array(z.enum(["details", "carriers", "contacts", "altloc", "tabs", "comments"])).optional()
-    .describe("Data blocks to include. Default ['details','carriers']. VERIFIED in paid responses 2026-07-03 — note the scope values do NOT match the response keys: 'carriers' -> carrier_history; 'altloc' -> other_locations (array of {fein,name,address,city,state,zip}); 'tabs' -> up to FOUR top-level blocks (no 'tabs' key in the response): osha ({violationCount,violationCost,inspections}), benefits_health (Form 5500 Sch A, ~50 fields), benefits_retirement (Form 5500, ~69 fields), and on DOT-flagged companies a dot array (VERIFIED on a live trucking risk: per-MCS-150-filing rows, 35 fields incl. US DOT #, Safety Rating, Power Units, Drivers, Mileage, Carrier Operation, Insurance Providers/Type, Max Coverage (x1000), Policy Num — absent on non-DOT risks). 'contacts' -> contacts array with {name,firstname,lastname,email,position,phone,profileUrl,year} — restored via scope after disappearing from the default response in June 2026. 'comments' -> comments array (notes/flag history)."),
+    .describe("Data blocks to include. Default ['details','carriers']. VERIFIED in paid responses 2026-07-03 — note the scope values do NOT match the response keys: 'carriers' -> carrier_history; 'altloc' -> other_locations (array of {fein,name,address,city,state,zip}); 'tabs' -> up to FOUR top-level blocks (no 'tabs' key in the response): osha ({violationCount,violationCost,inspections}), benefits_health (Form 5500 Sch A, ~50 fields), benefits_retirement (Form 5500, ~69 fields), and on DOT-flagged companies a dot array (VERIFIED live 2026-07-03: per-MCS-150-filing rows, 35 fields incl. US DOT #, Safety Rating, Power Units, Drivers, Mileage, Carrier Operation, Insurance Providers/Type, Max Coverage (x1000), Policy Num — absent on non-DOT risks). The dot block keys on the company's DOT FLAG (search results carry dot=1), NOT its industry: pest-control, pool-care, landscaping, NEMT/healthcare-transport, and other fleet operators have FMCSA registrations too — do not skip 'tabs' because a company \"isn't a trucking company\". 'contacts' -> contacts array with {name,firstname,lastname,email,position,phone,profileUrl,year} — restored via scope after disappearing from the default response in June 2026. 'comments' -> comments array (notes/flag history)."),
 };
 
 export const TalkpointsSchema: Shape = {
@@ -310,12 +324,12 @@ export interface XdateHandlers {
  * where the client should only have access to free reads (e.g. evaluation,
  * demos, or untrusted MCP clients without their own confirmation gates).
  * Gated: the priced tools (company_details $0.25, talkpoints $0.10,
- * serff_filing $0.10), serff_search (vendor sources CONFLICT as of 2026-07-03:
- * the official pricing page lists $0.05/call while tools/list metadata says
- * free — treated as paid, stays gated pending a billing receipt), and the
- * two stored-content executors (group_companies, run_saved_search — upstream
- * declares them free, but they execute account content the wrapper cannot
- * inspect and could not be behavior-verified, so they stay gated too).
+ * serff_filing $0.10, serff_search $0.05 — all LEDGER-CONFIRMED 2026-07-03;
+ * the metadata's "serff_search is free" claim was disproven by 9 ledger
+ * charges), and the two stored-content executors (group_companies,
+ * run_saved_search — upstream declares them free, but they execute account
+ * content the wrapper cannot inspect and could not be behavior-verified,
+ * so they stay gated too).
  * Always-free tools (search, match, filter, benefits_search, flagged_companies,
  * groups, saved_searches) are always enabled — note the account-read tools
  * still expose the agency's flag/pipeline lists to any connected client.
@@ -355,7 +369,7 @@ const PAID_DISABLED_RESULT: CallToolResult = {
   content: [
     {
       type: "text",
-      text: "Gated XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search (conflicting vendor pricing 2026-07-03: $0.05 per the official pricing page vs free per tools/list metadata — treated as paid), group_companies and run_saved_search (unverified stored-content executors). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
+      text: "Gated XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — ledger-confirmed 2026-07-03, despite vendor metadata claiming free), group_companies and run_saved_search (unverified stored-content executors). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
     },
   ],
   isError: true,
@@ -436,10 +450,10 @@ export const TOOL_DESCRIPTIONS = {
   benefits_search: "Search Form 5500 benefits-plan records (free per upstream declaration, $0/call). datamode 1 = retirement plans (401k/pension): filter by participants, plan assets, commissions, provider name. datamode 2 = health/welfare plans (medical/dental/life): filter by insurance premiums, commission %, loss ratios, broker name; fromdate/todate filter the insurance renewal date. Returns companies with UIDs for company_details/talkpoints. Server-side filtering behavior-verified 2026-07-03 (see per-param notes). Pagination: limit 1-100, offset = records to skip (NOT the page number the WC search tool uses). Workers' comp is deliberately not available here — the upstream MCP's WC mode diverges from the REST endpoint (verified 2026-07-03), so WC stays on the `search` tool. Free-tier field masking applies to results like WC search.",
   match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone/address (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for looking up a known prospect by name before a detail pull. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",
   filter: "Look up valid filter values: carriers, carriergroups, class codes, SIC codes, industries, counties, agents, PEO providers, NAICS codes (for serff_search industry filters — NOT for WC search, where the REST endpoint ignores NAICS), SERFF insurance-type (TOI) codes, and SERFF severity-type categories (response-side reference only). policyoptions and addloptions are fixed enums on the search tool, not filter-tool lookups — pass values directly to search(). Free.",
-  company_details: "Full company details for a UID. Default response (observed 2026-06-12): summary (markdown top-line), user_status (CRM-style flag/appointment status, often null), details (per-field count varies by record: ~77 fields observed 2026-06-12, 46 on two records probed 2026-07-03; incl. premium, payroll, mod/renmod, carrier, agent), carrier_history[] (full per-policy-term rows across years and states — can run to hundreds of rows for multi-state operators), _meta (per-field documentation). Optional `scope` blocks VERIFIED in paid responses 2026-07-03: 'contacts' returns a contacts[] array (name/email/position/phone/LinkedIn profileUrl) — contact data is BACK via scope after vanishing from the default response in June 2026; 'altloc' returns under the key `other_locations`; 'tabs' returns osha + benefits_health + benefits_retirement as top-level blocks (no 'tabs' key), plus on DOT-flagged companies a dot[] block VERIFIED on a live trucking risk — per-MCS-150-filing rows with 35 fields (US DOT #, Safety Rating, Power Units, Drivers, Mileage, Carrier Operation, Insurance Providers/Type, Max Coverage, Policy Num); 'comments' returns a comments[] array. Cost: published $0.25/call, but a live balance-delta test 2026-07-03 observed $0.00 actual on this account (a fresh, never-pulled UID moved neither apiBalance nor apiFreeMonthly); 90-day same-company dedupe is separately vendor-documented in two written sources. Published price retained as the caution ceiling; tool stays gated (mechanism unconfirmed). Saving or caching forbidden by XDate terms.",
-  talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: published $0.10/call, but a live balance-delta test 2026-07-03 observed $0.00 actual on this account (fresh call moved neither counter); published price kept as caution ceiling, tool stays gated. Saving or caching forbidden.",
-  serff_search: "Search SERFF rate filings. Server-side filters: carrier_naic (OPTIONAL since Q3 2026 — statewide all-carrier queries verified 2026-07-03), state, insurance_type (TOI like '16.0' for WC; discover via filter param=instypelist), severity ('1'-'5', single or comma-list like '3,4,5' — comma-list verified 2026-07-03), policyholders_min (verified 2026-07-03), industry_naic_prefix and naics3 (verified 2026-07-03), industry_naic and policyholders_max (upstream-declared, not individually behavior-verified). sentiment, severity_types, and sub_type are RESPONSE fields — filter the returned filings yourself; they are NOT accepted as tool arguments (undeclared args are silently dropped, the call still succeeds, and results come back unfiltered). Pricing: vendor sources conflict (pricing page $0.05/call vs tools/list metadata free, 2026-07-03) AND a live account balance-delta test the same day observed $0.00 actual on this account (apiBalance/apiFreeMonthly did not move on a fresh call). Stays behind the XDATE_DISABLE_PAID gate: mechanism unconfirmed, and published $0.05 is retained as the caution ceiling.",
-  serff_filing: "Full SERFF filing details: narratives, coverage changes, actuarial justifications. Cost: published $0.10/call, but a live balance-delta test 2026-07-03 observed $0.00 actual on this account (fresh filing moved neither counter); published price kept as caution ceiling, tool stays gated. Saving or caching forbidden.",
+  company_details: "Full company details for a UID. Default response (observed 2026-06-12): summary (markdown top-line), user_status (CRM-style flag/appointment status, often null), details (per-field count varies by record: ~77 fields observed 2026-06-12, 46 on two records probed 2026-07-03; incl. premium, payroll, mod/renmod, carrier, agent), carrier_history[] (full per-policy-term rows across years and states — can run to hundreds of rows for multi-state operators), _meta (per-field documentation). Optional `scope` blocks VERIFIED in paid responses 2026-07-03: 'contacts' returns a contacts[] array (name/email/position/phone/LinkedIn profileUrl) — contact data is BACK via scope after vanishing from the default response in June 2026; 'altloc' returns under the key `other_locations`; 'tabs' returns osha + benefits_health + benefits_retirement as top-level blocks (no 'tabs' key), plus on DOT-flagged companies a dot[] block VERIFIED on a live trucking risk — per-MCS-150-filing rows with 35 fields (US DOT #, Safety Rating, Power Units, Drivers, Mileage, Carrier Operation, Insurance Providers/Type, Max Coverage, Policy Num); 'comments' returns a comments[] array. Cost: $0.25/call, LEDGER-CONFIRMED 2026-07-03 (charges draw from the account's $5/mo included allowance first, then the XChange balance — invisible to a balance-only check until the allowance is exhausted). Dedupe reality per the same ledger: same-day same-record repeats were free, but a company last pulled 57 days earlier was RE-CHARGED — the advertised 90-day dedupe did not apply; plan spend assuming same-day dedupe only. Saving or caching forbidden by XDate terms.",
+  talkpoints: "Prospecting talking points and industry/coverage research for a UID. Returns Premium/LCM/Market-Competitiveness percentile flags with sentiment. Cost: $0.10/call, confirmed on Jun 26-27 ledger rows (charges hit the $5/mo included allowance first, then the XChange balance); note a fresh Jul 3 call produced no visible ledger charge as of the readback — unresolved, re-check next ledger read. Assume same-day dedupe only — the advertised 90-day window failed a live test on company_details. Saving or caching forbidden.",
+  serff_search: "Search SERFF rate filings. Server-side filters: carrier_naic (OPTIONAL since Q3 2026 — statewide all-carrier queries verified 2026-07-03), state, insurance_type (TOI like '16.0' for WC; discover via filter param=instypelist), severity ('1'-'5', single or comma-list like '3,4,5' — comma-list verified 2026-07-03), policyholders_min (verified 2026-07-03), industry_naic_prefix and naics3 (verified 2026-07-03), industry_naic and policyholders_max (upstream-declared, not individually behavior-verified). sentiment, severity_types, and sub_type are RESPONSE fields — filter the returned filings yourself; they are NOT accepted as tool arguments (undeclared args are silently dropped, the call still succeeds, and results come back unfiltered). Pricing: $0.05/call, LEDGER-CONFIRMED 2026-07-03 (9 calls -> 9 x $0.05 charges in the account's XChange ledger; the tools/list metadata's 'FREE' claim is disproven — trust the ledger, not vendor metadata). NO dedupe: an identical same-day repeat was charged. Charges draw from the $5/mo included allowance first, then the XChange balance. Gated via XDATE_DISABLE_PAID like the other paid tools.",
+  serff_filing: "Full SERFF filing details: narratives, coverage changes, actuarial justifications. Cost: $0.10/call, LEDGER-CONFIRMED 2026-07-03; a same-day same-filing repeat was NOT charged (same-day dedupe confirmed; treat the advertised 90-day window as unreliable). Charges draw from the $5/mo included allowance first. Saving or caching forbidden.",
   flagged_companies: "List companies you (or your agency) have flagged. Flag types: save, contacted, quoting, written, nextyear, followup (has appttime), appt (has appttime). Returns UIDs usable with company_details/talkpoints. Free per upstream declaration; behavior-probed 2026-07-03. Note: exposes the agency's flag/pipeline list to any connected MCP client.",
   groups: "List your saved company groups plus groups shared by other agency members. Groups are named buckets of companies for batch workflows. Call this before group_companies. Free per upstream declaration; behavior-probed 2026-07-03.",
   group_companies: "Get the companies in a saved group (same result format as search: UIDs, city, state). Upstream declares this free (2026-07-03), but it executes stored account content the wrapper cannot inspect and could not be behavior-verified on this account (no saved groups existed to probe) — gated behind XDATE_DISABLE_PAID as a precaution until observed-free evidence exists.",
