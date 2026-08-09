@@ -162,23 +162,29 @@ endpoint that any remote-MCP client connects to — no local install.
 
 #### Using a hosted instance (bring your own key)
 
-If someone already hosts this server in BYOK mode, all you need is your own
-InsuranceXDate API key (any subscription with API access). Your requests
-authenticate with your key and bill your account; the relay uses the key
-per-request and never stores or logs it.
+**A hosted instance is available at
+[mcp.renewalrelay.com](https://mcp.renewalrelay.com) — you can connect right
+now.** All you need is your own InsuranceXDate API key (any subscription
+with API access). Your requests authenticate with your key and bill your
+account; the relay uses the key per-request and never stores or logs it
+(see the landing page for the full disclosure).
 
 - **claude.ai / Claude Desktop / Cowork** — Settings → Connectors → Add
-  custom connector, URL: `https://<host>/mcp/<your-api-key>`. On Team/
-  Enterprise an Owner adds it once under Organization settings → Connectors
-  and every member just toggles it on. Treat the full URL as a credential —
-  it contains your key.
-- **Claude Code / Cursor / Claude API** — point at `https://<host>/mcp`
-  with header `Authorization: Bearer <your-api-key>`, e.g.:
+  custom connector, URL: `https://mcp.renewalrelay.com/mcp/<your-api-key>`.
+  On Team/Enterprise an Owner adds it once under Organization settings →
+  Connectors and every member just toggles it on. Treat the full URL as a
+  credential — it contains your key.
+- **Claude Code / Cursor / Claude API** — point at
+  `https://mcp.renewalrelay.com/mcp` with header
+  `Authorization: Bearer <your-api-key>`, e.g.:
 
   ```sh
-  claude mcp add --transport http insurancexdate https://<host>/mcp \
+  claude mcp add --transport http insurancexdate https://mcp.renewalrelay.com/mcp \
     --header "Authorization: Bearer <your-api-key>"
   ```
+
+Any other BYOK deployment of this server works the same way with its host
+substituted.
 
 That's the whole setup. Requests without a valid key get 401; each key is
 rate-limited (60 req/min by default).
