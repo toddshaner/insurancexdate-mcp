@@ -17,9 +17,11 @@
  * the secret URL is the minimum viable gate). Treat the full URL as a
  * credential.
  *
- * BYOK (MCP_BYOK=1): the server holds no key; each request carries the
- * caller's own InsuranceXDate API key, which is used for that request only -
- * never stored, never logged. Two transports for the credential:
+ * BYOK (MCP_BYOK=1): the server uses no key of its own; each request
+ * carries the caller's own InsuranceXDate API key, which is used for that
+ * request only - never stored, never logged. Private-mode env vars, if a
+ * platform leaves them behind, are ignored with a loud warning. Two
+ * transports for the credential:
  *   - `Authorization: Bearer <key>` on POST /mcp (clients that support
  *     custom headers: Claude Code, Cursor, the Claude API MCP connector)
  *   - POST /mcp/<key> (clients that only take a URL, e.g. claude.ai custom
@@ -28,9 +30,8 @@
  *
  * Env: PORT (defaults to DEFAULT_PORT), XDATE_DISABLE_PAID (optional,
  * instance-wide, see tools.ts). Private mode: INSURANCEXDATE_API_KEY and
- * MCP_PATH_TOKEN (>=16 chars) required. BYOK mode: MCP_BYOK=1, and both
- * private-mode vars must be UNSET (refuses to start otherwise, so a shared
- * key can never silently back a BYOK deployment); MCP_RATE_LIMIT_PER_MIN
+ * MCP_PATH_TOKEN (>=16 chars) required. BYOK mode: MCP_BYOK=1 (private-mode
+ * vars, if also present, are ignored with a warning); MCP_RATE_LIMIT_PER_MIN
  * tunes the per-key rate limit (defaults to DEFAULT_RATE_LIMIT_PER_MIN,
  * 0 disables). BYOK mode also serves a neutral disclosure page at GET /;
  * private instances stay dark on every non-MCP path.
@@ -188,10 +189,14 @@ async function main() {
   let pathToken: string | null = null;
   if (byokMode) {
     if (process.env.INSURANCEXDATE_API_KEY || process.env.MCP_PATH_TOKEN) {
+      // Warn-and-ignore rather than exit: some platforms (e.g. App Runner
+      // updates) merge old env/secrets into a new revision, and a hard exit
+      // turns that leftover into a crash-looped deploy + rollback. The
+      // guarantee stands either way: in BYOK mode these values are never
+      // read again - every request uses only the credential it carried.
       console.error(
-        "MCP_BYOK=1 is incompatible with INSURANCEXDATE_API_KEY / MCP_PATH_TOKEN. A BYOK server must hold no key of its own - unset them (or drop MCP_BYOK for a private instance).",
+        "MCP_BYOK=1: ignoring INSURANCEXDATE_API_KEY / MCP_PATH_TOKEN found in the environment. A BYOK server uses only per-request keys - remove them from the deployment config.",
       );
-      process.exit(1);
     }
   } else {
     sharedClient = new XdateClient(readApiKeyOrExit());

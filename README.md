@@ -194,9 +194,10 @@ rate-limited (60 req/min by default).
 The remote entrypoint is `server/dist/http.js` — same tools as stdio,
 stateless (no session affinity). Two mutually exclusive modes:
 
-- **BYOK service** (`MCP_BYOK=1`): holds no key; callers supply theirs as
-  above. Serves a disclosure page at `GET /`. Refuses to start if a server
-  key is also configured.
+- **BYOK service** (`MCP_BYOK=1`): uses no server-side key; callers supply
+  theirs as above. Serves a disclosure page at `GET /`. A leftover
+  `INSURANCEXDATE_API_KEY` in the environment is never used (ignored with a
+  startup warning).
 - **Private instance** (default): one org-wide key from
   `INSURANCEXDATE_API_KEY`, gated by a secret URL segment `MCP_PATH_TOKEN`
   (≥16 chars): clients POST to `https://<host>/mcp/<MCP_PATH_TOKEN>`. Every
