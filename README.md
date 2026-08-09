@@ -155,63 +155,62 @@ npx -y @anthropic-ai/mcpb pack .
 
 For a slimmer `.mcpb`, run `npm prune --omit=dev` after build to strip TypeScript and `@types/*` from `node_modules` — `.mcpbignore` covers them anyway, but pruning is cleaner.
 
-### Option E: Self-hosted remote server (streamable HTTP)
+### Option E: Remote server (streamable HTTP)
 
-Options A–D run a local process per machine. Alternatively, host one shared
-instance behind HTTPS and point any remote-MCP client at it — including a
-[claude.ai organization custom connector](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
-which gives a whole Team/Enterprise org the tools with no per-machine
-installs (each member just toggles the connector on).
+Options A–D run a local process per machine. Option E is one shared HTTPS
+endpoint that any remote-MCP client connects to — no local install.
 
-The remote entrypoint is `server/dist/http.js` (same tools, same build). It
-is stateless — no session affinity needed — and runs in one of two
-mutually exclusive auth modes:
+#### Using a hosted instance (bring your own key)
 
-**Private instance** (default): one org-wide key. Requires
-`INSURANCEXDATE_API_KEY`, and `MCP_PATH_TOKEN` (≥16 chars, e.g.
-`openssl rand -hex 24`), which becomes the secret path segment clients must
-POST to: `https://<host>/mcp/<MCP_PATH_TOKEN>`. There is no OAuth layer —
-the URL is the credential, so treat it like one; every request it serves
-spends your API key's balance.
+If someone already hosts this server in BYOK mode, all you need is your own
+InsuranceXDate API key (any subscription with API access). Your requests
+authenticate with your key and bill your account; the relay uses the key
+per-request and never stores or logs it.
 
-**Bring-your-own-key service** (`MCP_BYOK=1`): the server holds no key at
-all — each caller supplies their own InsuranceXDate API key per request,
-used for that request only, never stored or logged. Their calls spend their
-account's balance, not the host's. The key travels one of two ways:
+- **claude.ai / Claude Desktop / Cowork** — Settings → Connectors → Add
+  custom connector, URL: `https://<host>/mcp/<your-api-key>`. On Team/
+  Enterprise an Owner adds it once under Organization settings → Connectors
+  and every member just toggles it on. Treat the full URL as a credential —
+  it contains your key.
+- **Claude Code / Cursor / Claude API** — point at `https://<host>/mcp`
+  with header `Authorization: Bearer <your-api-key>`, e.g.:
 
-- `Authorization: Bearer <key>` on `https://<host>/mcp` — for clients that
-  support custom headers (Claude Code, Cursor, the Claude API MCP connector)
-- in the URL, `https://<host>/mcp/<key>` — for clients that only take a URL
-  (e.g. claude.ai custom connectors)
+  ```sh
+  claude mcp add --transport http insurancexdate https://<host>/mcp \
+    --header "Authorization: Bearer <your-api-key>"
+  ```
 
-The key is the auth: requests without a plausibly-shaped key get 401. The
-server refuses to start with `MCP_BYOK=1` if `INSURANCEXDATE_API_KEY` or
-`MCP_PATH_TOKEN` is also set, so a shared key can never silently back a
-BYOK deployment.
+That's the whole setup. Requests without a valid key get 401; each key is
+rate-limited (60 req/min by default).
 
-Both modes: paid tools can be switched off instance-wide with
-`XDATE_DISABLE_PAID=1`, and a `/healthz` endpoint plus one JSON access-log
-line per request (method, tool names, status, duration — never the URL path
-or headers, which may carry keys) are built in.
+#### Hosting it yourself
 
-Run it anywhere that runs a container:
+The remote entrypoint is `server/dist/http.js` — same tools as stdio,
+stateless (no session affinity). Two mutually exclusive modes:
+
+- **BYOK service** (`MCP_BYOK=1`): holds no key; callers supply theirs as
+  above. Serves a disclosure page at `GET /`. Refuses to start if a server
+  key is also configured.
+- **Private instance** (default): one org-wide key from
+  `INSURANCEXDATE_API_KEY`, gated by a secret URL segment `MCP_PATH_TOKEN`
+  (≥16 chars): clients POST to `https://<host>/mcp/<MCP_PATH_TOKEN>`. Every
+  request spends the host's key.
+
+Both modes: `XDATE_DISABLE_PAID=1` disables paid tools instance-wide;
+`/healthz` for health checks; access logs record tool names, status, and
+timing — never URL paths, headers, or keys.
 
 ```sh
 docker build -t insurancexdate-mcp server
-# private instance:
-docker run -p 8080:8080 \
-  -e INSURANCEXDATE_API_KEY=your-key-here \
-  -e MCP_PATH_TOKEN="$(openssl rand -hex 24)" \
-  insurancexdate-mcp
-# or BYOK service:
-docker run -p 8080:8080 -e MCP_BYOK=1 insurancexdate-mcp
+docker run -p 8080:8080 -e MCP_BYOK=1 insurancexdate-mcp          # BYOK
+# or private:
+docker run -p 8080:8080 -e INSURANCEXDATE_API_KEY=... \
+  -e MCP_PATH_TOKEN="$(openssl rand -hex 24)" insurancexdate-mcp
 ```
 
-Or without Docker: `MCP_PATH_TOKEN=... INSURANCEXDATE_API_KEY=... node server/dist/http.js`
-(listens on `PORT`, default 8080).
-
-For a production AWS deployment (App Runner + ECR + SSM secrets + a custom
-domain in Cloudflare DNS, all `.env`-driven), see
+Without Docker: `MCP_BYOK=1 node server/dist/http.js` (listens on `PORT`,
+default 8080). For a production AWS deployment (App Runner + custom domain
+via Cloudflare DNS, `.env`-driven), see
 [`deploy/pulumi/`](deploy/pulumi/README.md).
 
 ## Usage examples
