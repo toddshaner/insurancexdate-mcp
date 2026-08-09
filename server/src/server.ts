@@ -40,11 +40,16 @@ type AnySchema = any;
 type AnyHandler = any;
 
 /**
+ * A key with interior whitespace or control characters would be rejected by
+ * undici's header validation per-call — and the thrown message echoes the
+ * header value, leaking the key into tool error text. Validate up front and
+ * reject WITHOUT echoing the key.
+ */
+export const API_KEY_CHARSET = /^[!-~]+$/;
+
+/**
  * Reads and validates INSURANCEXDATE_API_KEY, exiting the process with a
- * key-free message on failure. A key with interior whitespace or control
- * characters would be rejected by undici's header validation per-call — and
- * the thrown message echoes the header value, leaking the key into tool
- * error text. Validate once at startup and exit WITHOUT echoing the key.
+ * key-free message on failure.
  */
 export function readApiKeyOrExit(): string {
   const apiKey = process.env.INSURANCEXDATE_API_KEY?.trim() ?? "";
@@ -52,7 +57,7 @@ export function readApiKeyOrExit(): string {
     console.error("INSURANCEXDATE_API_KEY environment variable is required");
     process.exit(1);
   }
-  if (!/^[!-~]+$/.test(apiKey)) {
+  if (!API_KEY_CHARSET.test(apiKey)) {
     console.error(
       "INSURANCEXDATE_API_KEY contains invalid characters (whitespace or control characters). Re-paste the key as a single line.",
     );

@@ -164,23 +164,47 @@ which gives a whole Team/Enterprise org the tools with no per-machine
 installs (each member just toggles the connector on).
 
 The remote entrypoint is `server/dist/http.js` (same tools, same build). It
-is stateless — no session affinity needed — and requires two env vars:
+is stateless — no session affinity needed — and runs in one of two
+mutually exclusive auth modes:
+
+**Private instance** (default): one org-wide key. Requires
 `INSURANCEXDATE_API_KEY`, and `MCP_PATH_TOKEN` (≥16 chars, e.g.
 `openssl rand -hex 24`), which becomes the secret path segment clients must
 POST to: `https://<host>/mcp/<MCP_PATH_TOKEN>`. There is no OAuth layer —
 the URL is the credential, so treat it like one; every request it serves
-spends your API key's balance. Paid tools can be switched off instance-wide
-with `XDATE_DISABLE_PAID=1`. A `/healthz` endpoint and one JSON access-log
-line per request (method, tool names, status, duration) are built in.
+spends your API key's balance.
+
+**Bring-your-own-key service** (`MCP_BYOK=1`): the server holds no key at
+all — each caller supplies their own InsuranceXDate API key per request,
+used for that request only, never stored or logged. Their calls spend their
+account's balance, not the host's. The key travels one of two ways:
+
+- `Authorization: Bearer <key>` on `https://<host>/mcp` — for clients that
+  support custom headers (Claude Code, Cursor, the Claude API MCP connector)
+- in the URL, `https://<host>/mcp/<key>` — for clients that only take a URL
+  (e.g. claude.ai custom connectors)
+
+The key is the auth: requests without a plausibly-shaped key get 401. The
+server refuses to start with `MCP_BYOK=1` if `INSURANCEXDATE_API_KEY` or
+`MCP_PATH_TOKEN` is also set, so a shared key can never silently back a
+BYOK deployment.
+
+Both modes: paid tools can be switched off instance-wide with
+`XDATE_DISABLE_PAID=1`, and a `/healthz` endpoint plus one JSON access-log
+line per request (method, tool names, status, duration — never the URL path
+or headers, which may carry keys) are built in.
 
 Run it anywhere that runs a container:
 
 ```sh
 docker build -t insurancexdate-mcp server
+# private instance:
 docker run -p 8080:8080 \
   -e INSURANCEXDATE_API_KEY=your-key-here \
   -e MCP_PATH_TOKEN="$(openssl rand -hex 24)" \
   insurancexdate-mcp
+# or BYOK service:
+docker run -p 8080:8080 -e MCP_BYOK=1 insurancexdate-mcp
 ```
 
 Or without Docker: `MCP_PATH_TOKEN=... INSURANCEXDATE_API_KEY=... node server/dist/http.js`

@@ -44,14 +44,23 @@ settings → Connectors:
 
 ## Security model
 
-There is no OAuth layer; the URL's path token is the only gate (a
-"capability URL"). Treat the full URL as a credential: share it only through
-the org connector config, and rotate it by changing `MCP_PATH_TOKEN` in
-`.env` + `./up.sh` if it leaks. Every request an attacker could make with
-the URL spends your InsuranceXDate balance.
+Two mutually exclusive auth modes, chosen in `.env` (see `.env.example` and
+the root README's Option E for details):
 
-Paid tools are disabled by default on the shared instance for the same
-reason; opt back in with `XDATE_DISABLE_PAID=0` in `.env`.
+**Private instance** (default): there is no OAuth layer; the URL's path
+token is the only gate (a "capability URL"). Treat the full URL as a
+credential: share it only through the org connector config, and rotate it by
+changing `MCP_PATH_TOKEN` in `.env` + `./up.sh` if it leaks. Every request
+an attacker could make with the URL spends your InsuranceXDate balance.
+
+**BYOK** (`MCP_BYOK=1`): the deployment stores no key anywhere (no SSM
+parameters are created); each caller authenticates with their own
+InsuranceXDate key per request and spends their own balance. The
+`connectorUrl` output becomes a template for callers to fill in.
+
+Paid tools are disabled by default in both modes; opt back in with
+`XDATE_DISABLE_PAID=0` in `.env` (in BYOK mode callers spend their own
+accounts, so enabling them is usually right).
 
 ## Traffic visibility
 

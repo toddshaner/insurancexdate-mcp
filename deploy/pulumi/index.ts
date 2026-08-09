@@ -8,8 +8,9 @@
  * Configuration is entirely environment-driven — copy .env.example to .env
  * and deploy with ./up.sh, which sources .env into the process environment
  * so both this program and the provider plugins (AWS, Cloudflare) see the
- * same values. Required: INSURANCEXDATE_API_KEY, MCP_PATH_TOKEN, MCP_DOMAIN,
- * CLOUDFLARE_API_TOKEN. See .env.example for the full list.
+ * same values. Always required: MCP_DOMAIN, CLOUDFLARE_API_TOKEN. Private
+ * mode additionally requires INSURANCEXDATE_API_KEY + MCP_PATH_TOKEN; BYOK
+ * mode (MCP_BYOK=1) forbids them. See .env.example for the full list.
  *
  * The connector URL (including the secret path token) is exported as the
  * `connectorUrl` stack output; read it with
@@ -35,16 +36,27 @@ function requireEnv(name: string): string {
 // at container startup.
 const MIN_TOKEN_LENGTH = 16;
 
+// MCP_BYOK=1 deploys a bring-your-own-key server: no key of its own, callers
+// send theirs per request (see server/src/http.ts). Mirrors the server's
+// truthy set. Mutually exclusive with the private-mode secrets below.
+const BYOK_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
+const byokMode = BYOK_TRUTHY.has((process.env.MCP_BYOK ?? "").trim().toLowerCase());
+if (byokMode && (process.env.INSURANCEXDATE_API_KEY || process.env.MCP_PATH_TOKEN)) {
+  throw new Error(
+    "MCP_BYOK=1 is incompatible with INSURANCEXDATE_API_KEY / MCP_PATH_TOKEN in .env — a BYOK server must hold no key of its own.",
+  );
+}
+
 // pulumi.secret() so the values are encrypted in the stack state, not just
 // absent from source control.
-const apiKey = pulumi.secret(requireEnv("INSURANCEXDATE_API_KEY"));
-const rawPathToken = requireEnv("MCP_PATH_TOKEN");
-if (rawPathToken.length < MIN_TOKEN_LENGTH) {
+const apiKey = byokMode ? null : pulumi.secret(requireEnv("INSURANCEXDATE_API_KEY"));
+const rawPathToken = byokMode ? null : requireEnv("MCP_PATH_TOKEN");
+if (rawPathToken !== null && rawPathToken.length < MIN_TOKEN_LENGTH) {
   throw new Error(
     `MCP_PATH_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters (generate one with \`openssl rand -hex 24\`).`,
   );
 }
-const pathToken = pulumi.secret(rawPathToken);
+const pathToken = rawPathToken === null ? null : pulumi.secret(rawPathToken);
 
 // Custom domain in front of the generated App Runner hostname (e.g.
 // mcp.example.com), so the connector URL survives service re-creation. The
@@ -72,17 +84,22 @@ const image = new awsx.ecr.Image("insurancexdate-mcp", {
   platform: "linux/amd64",
 });
 
-const apiKeyParam = new aws.ssm.Parameter("api-key", {
-  name: "/insurancexdate-mcp/api-key",
-  type: "SecureString",
-  value: apiKey,
-});
-
-const pathTokenParam = new aws.ssm.Parameter("path-token", {
-  name: "/insurancexdate-mcp/path-token",
-  type: "SecureString",
-  value: pathToken,
-});
+// Private mode only: the two secrets live in SSM and reach the container as
+// runtimeEnvironmentSecrets. A BYOK deployment has nothing to store.
+const secretParams = byokMode
+  ? null
+  : {
+      apiKey: new aws.ssm.Parameter("api-key", {
+        name: "/insurancexdate-mcp/api-key",
+        type: "SecureString",
+        value: apiKey as pulumi.Output<string>,
+      }),
+      pathToken: new aws.ssm.Parameter("path-token", {
+        name: "/insurancexdate-mcp/path-token",
+        type: "SecureString",
+        value: pathToken as pulumi.Output<string>,
+      }),
+    };
 
 // App Runner pulls the image from ECR with this role.
 const accessRole = new aws.iam.Role("ecr-access", {
@@ -101,23 +118,25 @@ const instanceRole = new aws.iam.Role("instance", {
   }),
 });
 
-new aws.iam.RolePolicy("instance-ssm-read", {
-  role: instanceRole.id,
-  policy: pulumi
-    .all([apiKeyParam.arn, pathTokenParam.arn])
-    .apply(([apiKeyArn, pathTokenArn]) =>
-      JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Action: ["ssm:GetParameters"],
-            Resource: [apiKeyArn, pathTokenArn],
-          },
-        ],
-      }),
-    ),
-});
+if (secretParams) {
+  new aws.iam.RolePolicy("instance-ssm-read", {
+    role: instanceRole.id,
+    policy: pulumi
+      .all([secretParams.apiKey.arn, secretParams.pathToken.arn])
+      .apply(([apiKeyArn, pathTokenArn]) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["ssm:GetParameters"],
+              Resource: [apiKeyArn, pathTokenArn],
+            },
+          ],
+        }),
+      ),
+  });
+}
 
 const service = new aws.apprunner.Service("insurancexdate-mcp", {
   serviceName: "insurancexdate-mcp",
@@ -131,11 +150,16 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
         port: "8080",
         // Omit XDATE_DISABLE_PAID entirely when paid tools are wanted:
         // tools.ts warns on any set-but-unrecognized value.
-        runtimeEnvironmentVariables: disablePaid ? { XDATE_DISABLE_PAID: "1" } : {},
-        runtimeEnvironmentSecrets: {
-          INSURANCEXDATE_API_KEY: apiKeyParam.arn,
-          MCP_PATH_TOKEN: pathTokenParam.arn,
+        runtimeEnvironmentVariables: {
+          ...(disablePaid ? { XDATE_DISABLE_PAID: "1" } : {}),
+          ...(byokMode ? { MCP_BYOK: "1" } : {}),
         },
+        runtimeEnvironmentSecrets: secretParams
+          ? {
+              INSURANCEXDATE_API_KEY: secretParams.apiKey.arn,
+              MCP_PATH_TOKEN: secretParams.pathToken.arn,
+            }
+          : {},
       },
     },
   },
@@ -191,6 +215,10 @@ new cloudflare.DnsRecord("mcp-cname", {
 });
 
 export const serviceUrl = pulumi.interpolate`https://${service.serviceUrl}`;
-// Contains the path token — a capability URL. Paste into claude.ai
-// Organization settings -> Connectors, and treat it like a credential.
-export const connectorUrl = pulumi.secret(pulumi.interpolate`https://${domain}/mcp/${pathToken}`);
+// Private mode: contains the path token — a capability URL. Paste into
+// claude.ai Organization settings -> Connectors and treat it like a
+// credential. BYOK mode: a template — each caller substitutes their own
+// InsuranceXDate API key (or sends it as a Bearer header to /mcp instead).
+export const connectorUrl = pathToken
+  ? pulumi.secret(pulumi.interpolate`https://${domain}/mcp/${pathToken}`)
+  : pulumi.output(`https://${domain}/mcp/<your-insurancexdate-api-key>`);
