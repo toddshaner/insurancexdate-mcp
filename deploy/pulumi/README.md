@@ -62,6 +62,24 @@ Paid tools are disabled by default in both modes; opt back in with
 `XDATE_DISABLE_PAID=0` in `.env` (in BYOK mode callers spend their own
 accounts, so enabling them is usually right).
 
+## Running a second endpoint (e.g. private + BYOK)
+
+Each endpoint is its own stack with its own env file. The env file must set
+a distinct `MCP_SERVICE_NAME` (App Runner service names are unique per AWS
+account) and its own `MCP_DOMAIN`; the domain's zone may live in a different
+Cloudflare account, in which case that account's `CLOUDFLARE_API_TOKEN` goes
+in that env file.
+
+```bash
+cp .env.example .env.byok   # MCP_STACK=byok, MCP_BYOK=1,
+                            # MCP_SERVICE_NAME=insurancexdate-mcp-byok, ...
+./up.sh -e .env.byok        # auto-creates + selects the stack, then deploys
+```
+
+Set `MCP_STACK` in every env file (including `.env`) — `up.sh` selects that
+stack before running, so one file's values can never deploy into another
+file's stack via a stale `pulumi stack select`.
+
 ## Traffic visibility
 
 The container writes one JSON line per request (`evt: "request"` with the

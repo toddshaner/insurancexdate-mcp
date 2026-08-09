@@ -30,10 +30,13 @@
  * instance-wide, see tools.ts). Private mode: INSURANCEXDATE_API_KEY and
  * MCP_PATH_TOKEN (>=16 chars) required. BYOK mode: MCP_BYOK=1, and both
  * private-mode vars must be UNSET (refuses to start otherwise, so a shared
- * key can never silently back a BYOK deployment).
+ * key can never silently back a BYOK deployment); MCP_RATE_LIMIT_PER_MIN
+ * tunes the per-key rate limit (defaults to DEFAULT_RATE_LIMIT_PER_MIN,
+ * 0 disables). BYOK mode also serves a neutral disclosure page at GET /;
+ * private instances stay dark on every non-MCP path.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "node:http";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -52,6 +55,64 @@ const MIN_BYOK_KEY_LENGTH = 8;
 const MAX_BYOK_KEY_LENGTH = 256;
 
 const BYOK_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
+
+// BYOK-mode rate limit, per caller key, requests per minute. Protects the
+// upstream API (and every caller's account standing) from a runaway agent.
+// Override with MCP_RATE_LIMIT_PER_MIN; 0 disables. Token-bucket state is
+// per-process — good enough for a single-instance deployment; a horizontally
+// scaled fleet multiplies the effective limit by the instance count.
+const DEFAULT_RATE_LIMIT_PER_MIN = 60;
+const MAX_TRACKED_BUCKETS = 10_000;
+
+type Bucket = { tokens: number; last: number };
+const buckets = new Map<string, Bucket>();
+
+function rateLimitAllows(credential: string, limitPerMin: number): boolean {
+  if (limitPerMin <= 0) return true;
+  // Hash so raw caller keys are never retained as long-lived map keys.
+  const id = createHash("sha256").update(credential).digest("base64url").slice(0, 16);
+  const now = performance.now();
+  let bucket = buckets.get(id);
+  if (!bucket) {
+    if (buckets.size >= MAX_TRACKED_BUCKETS) {
+      for (const [key, b] of buckets) {
+        if (b.tokens >= limitPerMin) buckets.delete(key);
+        if (buckets.size < MAX_TRACKED_BUCKETS) break;
+      }
+    }
+    bucket = { tokens: limitPerMin, last: now };
+    buckets.set(id, bucket);
+  }
+  bucket.tokens = Math.min(limitPerMin, bucket.tokens + ((now - bucket.last) / 60_000) * limitPerMin);
+  bucket.last = now;
+  if (bucket.tokens < 1) return false;
+  bucket.tokens -= 1;
+  return true;
+}
+
+// Served at GET / in BYOK mode only: a neutral disclosure page so the
+// endpoint is accountable without being attributable. Private instances
+// stay dark (404) on every non-MCP path.
+const BYOK_LANDING_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InsuranceXDate MCP relay</title>
+<style>body{font-family:system-ui,sans-serif;max-width:38rem;margin:4rem auto;padding:0 1rem;line-height:1.6;color:#222}h1{font-size:1.4rem}code{background:#f2f2f2;padding:.1em .3em;border-radius:3px}</style>
+</head><body>
+<h1>InsuranceXDate MCP relay</h1>
+<p>A hosted <a href="https://modelcontextprotocol.io">MCP</a> endpoint for the
+InsuranceXDate API. Bring your own key: requests authenticate with your own
+InsuranceXDate API key, which is used for your request only &mdash; never stored,
+never logged. Your usage bills your own InsuranceXDate account.</p>
+<p>Connect an MCP client with <code>Authorization: Bearer &lt;your-key&gt;</code>
+against <code>/mcp</code>, or use <code>/mcp/&lt;your-key&gt;</code> where only a
+URL can be configured (e.g. claude.ai custom connectors).</p>
+<p>Operational logging is limited to tool names, response status, and timing.
+Query contents, results, and credentials are never logged. Requests are
+rate-limited per key.</p>
+<p>This service is not affiliated with or endorsed by Insurance Xdate. Server
+source code: <a href="https://github.com/toddshaner/insurancexdate-mcp">insurancexdate-mcp</a>
+&mdash; self-hosting instructions included.</p>
+</body></html>`;
 
 function readPathTokenOrExit(): string {
   const token = process.env.MCP_PATH_TOKEN?.trim() ?? "";
@@ -139,6 +200,7 @@ async function main() {
   warnIfDisablePaidUnrecognized();
 
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
+  const rateLimitPerMin = Number(process.env.MCP_RATE_LIMIT_PER_MIN ?? DEFAULT_RATE_LIMIT_PER_MIN);
 
   const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     const started = performance.now();
@@ -146,6 +208,11 @@ async function main() {
 
     if (req.method === "GET" && url.pathname === "/healthz") {
       res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      return;
+    }
+
+    if (byokMode && req.method === "GET" && url.pathname === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(BYOK_LANDING_HTML);
       return;
     }
 
@@ -175,6 +242,21 @@ async function main() {
               id: null,
             }),
           );
+        return;
+      }
+      if (!rateLimitAllows(credential, rateLimitPerMin)) {
+        res
+          .writeHead(429, { "content-type": "application/json", "retry-after": "60" })
+          .end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              error: { code: -32000, message: "Rate limit exceeded for this key. Retry shortly." },
+              id: null,
+            }),
+          );
+        console.log(
+          JSON.stringify({ evt: "request", status: 429, rateLimited: true, durationMs: Math.round(performance.now() - started) }),
+        );
         return;
       }
       client = new XdateClient(credential);

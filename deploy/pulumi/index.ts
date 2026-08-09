@@ -65,6 +65,12 @@ const pathToken = rawPathToken === null ? null : pulumi.secret(rawPathToken);
 const domain = requireEnv("MCP_DOMAIN");
 const zoneName = process.env.MCP_ZONE_NAME?.trim() || domain.split(".").slice(-2).join(".");
 
+// Physical service name; must be unique per stack when several endpoints
+// (e.g. a private instance and a BYOK instance) share one AWS account. The
+// default matches the original single-stack deployment so existing stacks
+// don't churn. SSM parameter paths derive from it for the same reason.
+const serviceName = process.env.MCP_SERVICE_NAME?.trim() || "insurancexdate-mcp";
+
 // Paid tools ($0.05-$0.25/call) stay DISABLED unless explicitly re-enabled:
 // a shared instance spends one account's balance for every caller. Uses the
 // falsy mirror of the server's TRUTHY_DISABLE_VALUES (tools.ts) so
@@ -90,12 +96,12 @@ const secretParams = byokMode
   ? null
   : {
       apiKey: new aws.ssm.Parameter("api-key", {
-        name: "/insurancexdate-mcp/api-key",
+        name: `/${serviceName}/api-key`,
         type: "SecureString",
         value: apiKey as pulumi.Output<string>,
       }),
       pathToken: new aws.ssm.Parameter("path-token", {
-        name: "/insurancexdate-mcp/path-token",
+        name: `/${serviceName}/path-token`,
         type: "SecureString",
         value: pathToken as pulumi.Output<string>,
       }),
@@ -139,7 +145,7 @@ if (secretParams) {
 }
 
 const service = new aws.apprunner.Service("insurancexdate-mcp", {
-  serviceName: "insurancexdate-mcp",
+  serviceName,
   sourceConfiguration: {
     autoDeploymentsEnabled: false,
     authenticationConfiguration: { accessRoleArn: accessRole.arn },
@@ -153,6 +159,9 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
         runtimeEnvironmentVariables: {
           ...(disablePaid ? { XDATE_DISABLE_PAID: "1" } : {}),
           ...(byokMode ? { MCP_BYOK: "1" } : {}),
+          ...(process.env.MCP_RATE_LIMIT_PER_MIN?.trim()
+            ? { MCP_RATE_LIMIT_PER_MIN: process.env.MCP_RATE_LIMIT_PER_MIN.trim() }
+            : {}),
         },
         runtimeEnvironmentSecrets: secretParams
           ? {
