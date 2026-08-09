@@ -1,0 +1,3 @@
+name: insurancexdate-mcp
+runtime: nodejs
+description: Hosted InsuranceXDate MCP server (streamable HTTP) on AWS App Runner

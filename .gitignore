@@ -9,6 +9,10 @@ server/dist/
 # Packed extension (cut a GitHub Release with the .mcpb attached instead)
 *.mcpb
 
+# Pulumi stack config (holds deployer-specific domain + encrypted secrets;
+# Pulumi.yaml itself stays tracked)
+deploy/pulumi/Pulumi.*.yaml
+
 # Editor / OS
 .DS_Store
 Thumbs.db
