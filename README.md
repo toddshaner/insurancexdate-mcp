@@ -155,6 +155,41 @@ npx -y @anthropic-ai/mcpb pack .
 
 For a slimmer `.mcpb`, run `npm prune --omit=dev` after build to strip TypeScript and `@types/*` from `node_modules` — `.mcpbignore` covers them anyway, but pruning is cleaner.
 
+### Option E: Self-hosted remote server (streamable HTTP)
+
+Options A–D run a local process per machine. Alternatively, host one shared
+instance behind HTTPS and point any remote-MCP client at it — including a
+[claude.ai organization custom connector](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
+which gives a whole Team/Enterprise org the tools with no per-machine
+installs (each member just toggles the connector on).
+
+The remote entrypoint is `server/dist/http.js` (same tools, same build). It
+is stateless — no session affinity needed — and requires two env vars:
+`INSURANCEXDATE_API_KEY`, and `MCP_PATH_TOKEN` (≥16 chars, e.g.
+`openssl rand -hex 24`), which becomes the secret path segment clients must
+POST to: `https://<host>/mcp/<MCP_PATH_TOKEN>`. There is no OAuth layer —
+the URL is the credential, so treat it like one; every request it serves
+spends your API key's balance. Paid tools can be switched off instance-wide
+with `XDATE_DISABLE_PAID=1`. A `/healthz` endpoint and one JSON access-log
+line per request (method, tool names, status, duration) are built in.
+
+Run it anywhere that runs a container:
+
+```sh
+docker build -t insurancexdate-mcp server
+docker run -p 8080:8080 \
+  -e INSURANCEXDATE_API_KEY=your-key-here \
+  -e MCP_PATH_TOKEN="$(openssl rand -hex 24)" \
+  insurancexdate-mcp
+```
+
+Or without Docker: `MCP_PATH_TOKEN=... INSURANCEXDATE_API_KEY=... node server/dist/http.js`
+(listens on `PORT`, default 8080).
+
+For a production AWS deployment (App Runner + ECR + SSM secrets + a custom
+domain in Cloudflare DNS, all `.env`-driven), see
+[`deploy/pulumi/`](deploy/pulumi/README.md).
+
 ## Usage examples
 
 After install, in any MCP-enabled chat client:
