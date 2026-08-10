@@ -22,6 +22,7 @@ import {
   SavedSearchesSchema,
   RunSavedSearchSchema,
   TOOL_DESCRIPTIONS,
+  paidDisabled,
 } from "./tools.js";
 
 /**
@@ -66,7 +67,15 @@ export function readApiKeyOrExit(): string {
   return apiKey;
 }
 
-export function createServer(client: XdateClient): McpServer {
+/**
+ * opts.paidTools: register the six gated tools ($0.05-$0.25/call upstream).
+ * Defaults to the XDATE_DISABLE_PAID env setting. When false the tools are
+ * not registered at all — absent from tools/list — so a model never
+ * considers them, instead of seeing them and being refused at call time.
+ * Can only narrow: the env kill switch still gates the handlers themselves.
+ */
+export function createServer(client: XdateClient, opts?: { paidTools?: boolean }): McpServer {
+  const paidTools = (opts?.paidTools ?? true) && !paidDisabled();
   const handlers = buildHandlers(client);
 
   const server = new McpServer({
@@ -103,30 +112,6 @@ export function createServer(client: XdateClient): McpServer {
   );
 
   server.registerTool(
-    "company_details",
-    { title: "Company details (paid $0.25)", description: TOOL_DESCRIPTIONS.company_details, inputSchema: CompanyDetailsSchema as AnySchema },
-    handlers.company_details as AnyHandler,
-  );
-
-  server.registerTool(
-    "talkpoints",
-    { title: "Talkpoints (paid $0.10)", description: TOOL_DESCRIPTIONS.talkpoints, inputSchema: TalkpointsSchema as AnySchema },
-    handlers.talkpoints as AnyHandler,
-  );
-
-  server.registerTool(
-    "serff_search",
-    { title: "SERFF filing search (paid $0.05, ledger-confirmed)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
-    handlers.serff_search as AnyHandler,
-  );
-
-  server.registerTool(
-    "serff_filing",
-    { title: "SERFF filing details (paid $0.10)", description: TOOL_DESCRIPTIONS.serff_filing, inputSchema: SerffFilingSchema as AnySchema },
-    handlers.serff_filing as AnyHandler,
-  );
-
-  server.registerTool(
     "benefits_search",
     { title: "Benefits search (Form 5500 retirement/health)", description: TOOL_DESCRIPTIONS.benefits_search, inputSchema: BenefitsSearchSchema as AnySchema },
     handlers.benefits_search as AnyHandler,
@@ -145,22 +130,51 @@ export function createServer(client: XdateClient): McpServer {
   );
 
   server.registerTool(
-    "group_companies",
-    { title: "Companies in a saved group (gated)", description: TOOL_DESCRIPTIONS.group_companies, inputSchema: GroupCompaniesSchema as AnySchema },
-    handlers.group_companies as AnyHandler,
-  );
-
-  server.registerTool(
     "saved_searches",
     { title: "List saved searches", description: TOOL_DESCRIPTIONS.saved_searches, inputSchema: SavedSearchesSchema as AnySchema },
     handlers.saved_searches as AnyHandler,
   );
 
-  server.registerTool(
-    "run_saved_search",
-    { title: "Run a saved search (gated)", description: TOOL_DESCRIPTIONS.run_saved_search, inputSchema: RunSavedSearchSchema as AnySchema },
-    handlers.run_saved_search as AnyHandler,
-  );
+  // Gated tools ($0.05-$0.25/call upstream, or unverified stored-content
+  // executors). Registered only when paid tools are in play; in free mode
+  // they are invisible rather than present-but-refusing.
+  if (paidTools) {
+    server.registerTool(
+      "company_details",
+      { title: "Company details (paid $0.25)", description: TOOL_DESCRIPTIONS.company_details, inputSchema: CompanyDetailsSchema as AnySchema },
+      handlers.company_details as AnyHandler,
+    );
+
+    server.registerTool(
+      "talkpoints",
+      { title: "Talkpoints (paid $0.10)", description: TOOL_DESCRIPTIONS.talkpoints, inputSchema: TalkpointsSchema as AnySchema },
+      handlers.talkpoints as AnyHandler,
+    );
+
+    server.registerTool(
+      "serff_search",
+      { title: "SERFF filing search (paid $0.05, ledger-confirmed)", description: TOOL_DESCRIPTIONS.serff_search, inputSchema: SerffSearchSchema as AnySchema },
+      handlers.serff_search as AnyHandler,
+    );
+
+    server.registerTool(
+      "serff_filing",
+      { title: "SERFF filing details (paid $0.10)", description: TOOL_DESCRIPTIONS.serff_filing, inputSchema: SerffFilingSchema as AnySchema },
+      handlers.serff_filing as AnyHandler,
+    );
+
+    server.registerTool(
+      "group_companies",
+      { title: "Companies in a saved group (gated)", description: TOOL_DESCRIPTIONS.group_companies, inputSchema: GroupCompaniesSchema as AnySchema },
+      handlers.group_companies as AnyHandler,
+    );
+
+    server.registerTool(
+      "run_saved_search",
+      { title: "Run a saved search (gated)", description: TOOL_DESCRIPTIONS.run_saved_search, inputSchema: RunSavedSearchSchema as AnySchema },
+      handlers.run_saved_search as AnyHandler,
+    );
+  }
 
   return server;
 }

@@ -189,6 +189,13 @@ substituted.
 That's the whole setup. Requests without a valid key get 401; each key is
 rate-limited (60 req/min by default).
 
+Six tools are paid upstream ($0.05–$0.25/call, priced in their titles) and
+bill the key owner's account; MCP clients ask permission before each call.
+To run **free-only** — the paid tools removed from the tool list entirely,
+so the model never even considers them — append `?paid=0` to the URL
+(`https://<host>/mcp/<your-api-key>?paid=0`), or send the Bearer form to
+`https://<host>/mcp?paid=0`.
+
 #### Hosting it yourself
 
 The remote entrypoint is `server/dist/http.js` — same tools as stdio,

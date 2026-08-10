@@ -294,7 +294,13 @@ async function main() {
       return;
     }
 
-    const server = createServer(client);
+    // Free mode per caller: `?paid=0` on the connector URL hides the gated
+    // tools from tools/list entirely for that caller's sessions, so a model
+    // never considers them. Narrowing only — it cannot re-enable tools the
+    // instance-wide XDATE_DISABLE_PAID kill switch has hidden.
+    const paidParam = (url.searchParams.get("paid") ?? "").trim().toLowerCase();
+    const paidOptOut = ["0", "false", "no", "off"].includes(paidParam);
+    const server = createServer(client, { paidTools: !paidOptOut });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

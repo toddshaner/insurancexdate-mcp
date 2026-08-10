@@ -343,7 +343,7 @@ export interface XdateHandlers {
  */
 const TRUTHY_DISABLE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
 
-function paidDisabled(): boolean {
+export function paidDisabled(): boolean {
   const value = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
   return TRUTHY_DISABLE_VALUES.has(value);
 }
