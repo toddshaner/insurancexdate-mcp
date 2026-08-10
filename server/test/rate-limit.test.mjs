@@ -86,6 +86,30 @@ test("idle buckets are evicted before active ones", () => {
   assert.equal(limiter.allow("active-2"), false, "eviction must not have reset active-2");
 });
 
+test("peek predicts allow() without charging or creating buckets", () => {
+  const clock = fakeClock();
+  const limiter = new RateLimiter(2, 10, clock);
+  // Unknown id: predicted by cost vs limit, and no bucket is created.
+  assert.equal(limiter.peek("k"), true);
+  assert.equal(limiter.peek("k", 3), false, "cost beyond the whole limit can never pass");
+  assert.equal(limiter.trackedBuckets, 0, "peek must not create buckets");
+  // Peeking consumes nothing: the full budget is still spendable.
+  assert.equal(limiter.allow("k"), true);
+  assert.equal(limiter.peek("k"), true);
+  assert.equal(limiter.peek("k"), true, "repeated peeks must not consume");
+  assert.equal(limiter.allow("k"), true);
+  assert.equal(limiter.peek("k"), false, "spent bucket peeks as denied");
+  assert.equal(limiter.allow("k"), false);
+  clock.advanceMs(30_000); // half a minute at limit 2 -> one token back
+  assert.equal(limiter.peek("k"), true, "peek must see refill");
+  assert.equal(limiter.allow("k"), true);
+});
+
+test("peek with limiting disabled always allows", () => {
+  const limiter = new RateLimiter(0, 10, fakeClock());
+  assert.equal(limiter.peek("k", 1000), true);
+});
+
 test("parseRateLimit accepts non-negative numbers, rejects everything else", () => {
   assert.equal(parseRateLimit("60"), 60);
   assert.equal(parseRateLimit(" 0 "), 0);

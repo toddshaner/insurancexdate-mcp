@@ -207,6 +207,30 @@ test("BYOK: host-wide backstop caps fabricated fresh keys", async () => {
   }
 });
 
+test("BYOK: a key-throttled caller does not drain the global budget", async () => {
+  const server = await startServer({
+    MCP_BYOK: "1",
+    MCP_RATE_LIMIT_PER_MIN: "1",
+    MCP_GLOBAL_RATE_LIMIT_PER_MIN: "2",
+  });
+  try {
+    const keyA = { authorization: "Bearer throttled-key-aaaa" };
+    const keyB = { authorization: "Bearer innocent-key-bbbb" };
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), keyA)).status, 200);
+    // keyA is now over ITS limit; these denials must not charge the host bucket.
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), keyA)).status, 429);
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), keyA)).status, 429);
+    // Global has 1 of 2 tokens left — keyB must still get through.
+    assert.equal(
+      (await post(server.port, "/mcp", initializeRequest(), keyB)).status,
+      200,
+      "key-level denials must not consume the global budget",
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test("private mode is rate-limited too", async () => {
   const server = await startServer({
     INSURANCEXDATE_API_KEY: "test-key-123",

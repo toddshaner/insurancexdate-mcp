@@ -61,7 +61,7 @@ import {
   requestCost,
 } from "./rate-limit.js";
 import { API_KEY_CHARSET, createServer, readApiKeyOrExit } from "./server.js";
-import { warnIfDisablePaidUnrecognized } from "./tools.js";
+import { isTruthy, warnIfDisablePaidUnrecognized } from "./tools.js";
 import { XdateClient } from "./xdate-client.js";
 
 const DEFAULT_PORT = 8080;
@@ -72,8 +72,6 @@ const MAX_BODY_BYTES = 1_048_576;
 // upstream key-format changes don't strand callers.
 const MIN_BYOK_KEY_LENGTH = 8;
 const MAX_BYOK_KEY_LENGTH = 256;
-
-const BYOK_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 
 // Served at GET / in BYOK mode only: a neutral disclosure page so the
 // endpoint is accountable without being attributable. Private instances
@@ -193,10 +191,14 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+/** A parsed POST body as the JSON-RPC requests it carries (batch = many). */
+function asBatch(body: unknown): unknown[] {
+  return Array.isArray(body) ? body : [body];
+}
+
 /** Names of tools/call targets in the request, for the access log. */
 function calledTools(body: unknown): string[] {
-  const requests = Array.isArray(body) ? body : [body];
-  return requests.flatMap((r) => {
+  return asBatch(body).flatMap((r) => {
     if (typeof r !== "object" || r === null) return [];
     const { method, params } = r as { method?: unknown; params?: { name?: unknown } };
     if (method !== "tools/call") return [];
@@ -205,15 +207,14 @@ function calledTools(body: unknown): string[] {
 }
 
 function jsonRpcMethods(body: unknown): string[] {
-  const requests = Array.isArray(body) ? body : [body];
-  return requests.flatMap((r) => {
+  return asBatch(body).flatMap((r) => {
     const method = (r as { method?: unknown } | null)?.method;
     return typeof method === "string" ? [method] : [];
   });
 }
 
 async function main() {
-  const byokMode = BYOK_TRUTHY.has((process.env.MCP_BYOK ?? "").trim().toLowerCase());
+  const byokMode = isTruthy(process.env.MCP_BYOK);
 
   let sharedClient: XdateClient | null = null;
   let pathToken: string | null = null;
@@ -312,12 +313,17 @@ async function main() {
     }
 
     // Rate limiting sits after body parse so a JSON-RPC batch is charged per
-    // request it carries - a batch of N costs N tokens, not 1. The host-wide
-    // backstop is charged first; a request denied there never touches (or
-    // creates) a per-key bucket.
+    // request it carries - a batch of N costs N tokens, not 1. Charge order:
+    // peek the host-wide backstop (no charge), charge the per-key bucket,
+    // then charge the host bucket only once both passed. That blocks both
+    // starvation modes: a global-level flood never mints per-key buckets,
+    // and a key-throttled caller never drains the global budget out from
+    // under everyone else. Synchronous throughout, so the peeked capacity
+    // cannot vanish before the charge.
     const cost = requestCost(body);
-    const globallyAllowed = globalLimiter.allow("host", cost);
+    const globallyAllowed = globalLimiter.peek("host", cost);
     const allowed = globallyAllowed && keyLimiter.allow(bucketId(credential), cost);
+    if (allowed) globalLimiter.allow("host", cost);
     if (!allowed) {
       jsonRpcError(
         res,
@@ -347,8 +353,7 @@ async function main() {
     // the instance-wide XDATE_DISABLE_PAID kill switch. Note this protects
     // against accidental spend by legitimate callers, not against a stolen
     // key — an attacker can add the parameter themselves.
-    const paidParam = (url.searchParams.get("paid") ?? "").trim().toLowerCase();
-    const paidOptIn = ["1", "true", "yes", "on"].includes(paidParam);
+    const paidOptIn = isTruthy(url.searchParams.get("paid"));
     const server = createServer(client, { paidTools: paidOptIn });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

@@ -74,6 +74,21 @@ export class RateLimiter {
     return true;
   }
 
+  /**
+   * Whether allow() would succeed right now, WITHOUT charging tokens or
+   * creating a bucket. Lets a caller consult two limiters and charge both
+   * only when both would pass — charging one bucket for a request the
+   * other bucket then denies would let traffic denied at one level starve
+   * the other level's budget. Only valid as a predictor of an immediately
+   * following allow() in the same synchronous turn (no awaits between).
+   */
+  peek(id: string, cost = 1): boolean {
+    if (this.limitPerMin <= 0) return true;
+    const bucket = this.buckets.get(id);
+    if (!bucket) return cost <= this.limitPerMin;
+    return this.refilled(bucket, this.now()) >= cost;
+  }
+
   private refilled(bucket: Bucket, now: number): number {
     return Math.min(this.limitPerMin, bucket.tokens + ((now - bucket.last) / 60_000) * this.limitPerMin);
   }
