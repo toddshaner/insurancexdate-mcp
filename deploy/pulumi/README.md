@@ -58,11 +58,14 @@ parameters are created); each caller authenticates with their own
 InsuranceXDate key per request and spends their own balance. The
 `connectorUrl` output becomes a template for callers to fill in.
 
-Paid tools ($0.05–$0.25/call) follow the mode: **disabled by default in
-private mode** (every call spends the host's key), **enabled by default in
-BYOK mode** (callers spend their own accounts; tools are price-labeled and
-MCP clients prompt before each call). Override either way with
-`XDATE_DISABLE_PAID` in `.env` (truthy disables, falsy enables).
+Paid tools ($0.05–$0.25/call) are two-layered. Per caller, connections are
+**free-only unless the URL carries `?paid=1`** (the gated tools are then
+listed, price-labeled, and the caller's key pays; MCP clients prompt before
+each call). At the instance level, `XDATE_DISABLE_PAID` in `.env` decides
+whether `?paid=1` can work at all: it defaults by mode — allowed in BYOK
+(callers spend their own accounts), disallowed in private mode (every call
+spends the host's key). Truthy disables, falsy enables, explicit setting
+wins.
 
 ## Running a second endpoint (e.g. private + BYOK)
 

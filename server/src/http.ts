@@ -107,6 +107,9 @@ never logged. Your usage bills your own InsuranceXDate account.</p>
 <p>Connect an MCP client with <code>Authorization: Bearer &lt;your-key&gt;</code>
 against <code>/mcp</code>, or use <code>/mcp/&lt;your-key&gt;</code> where only a
 URL can be configured (e.g. claude.ai custom connectors).</p>
+<p>Connections are free-only by default. To also expose the six paid tools
+($0.05&ndash;$0.25/call upstream, billed to your key, priced in their titles),
+append <code>?paid=1</code> to the URL.</p>
 <p>Operational logging is limited to tool names, response status, and timing.
 Query contents, results, and credentials are never logged. Requests are
 rate-limited per key.</p>
@@ -294,13 +297,15 @@ async function main() {
       return;
     }
 
-    // Free mode per caller: `?paid=0` on the connector URL hides the gated
-    // tools from tools/list entirely for that caller's sessions, so a model
-    // never considers them. Narrowing only — it cannot re-enable tools the
-    // instance-wide XDATE_DISABLE_PAID kill switch has hidden.
+    // Paid tools are OPT-IN per caller: connections are free-only unless the
+    // URL carries `?paid=1`, in which case the gated tools appear in
+    // tools/list (price-labeled; the caller's key pays). Cannot widen past
+    // the instance-wide XDATE_DISABLE_PAID kill switch. Note this protects
+    // against accidental spend by legitimate callers, not against a stolen
+    // key — an attacker can add the parameter themselves.
     const paidParam = (url.searchParams.get("paid") ?? "").trim().toLowerCase();
-    const paidOptOut = ["0", "false", "no", "off"].includes(paidParam);
-    const server = createServer(client, { paidTools: !paidOptOut });
+    const paidOptIn = ["1", "true", "yes", "on"].includes(paidParam);
+    const server = createServer(client, { paidTools: paidOptIn });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

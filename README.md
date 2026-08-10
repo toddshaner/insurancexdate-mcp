@@ -189,12 +189,13 @@ substituted.
 That's the whole setup. Requests without a valid key get 401; each key is
 rate-limited (60 req/min by default).
 
-Six tools are paid upstream ($0.05–$0.25/call, priced in their titles) and
-bill the key owner's account; MCP clients ask permission before each call.
-To run **free-only** — the paid tools removed from the tool list entirely,
-so the model never even considers them — append `?paid=0` to the URL
-(`https://<host>/mcp/<your-api-key>?paid=0`), or send the Bearer form to
-`https://<host>/mcp?paid=0`.
+**Connections are free-only by default** — the six paid tools are absent
+from the tool list entirely, so the model never even considers them. To
+opt in to the paid tools ($0.05–$0.25/call upstream, priced in their
+titles, billed to your key's account), append `?paid=1` to the URL:
+`https://<host>/mcp/<your-api-key>?paid=1` (or the Bearer form against
+`https://<host>/mcp?paid=1`). MCP clients still ask permission before each
+paid call.
 
 #### Hosting it yourself
 
