@@ -160,34 +160,30 @@ For a slimmer `.mcpb`, run `npm prune --omit=dev` after build to strip TypeScrip
 Options A–D run a local process per machine. Option E is one shared HTTPS
 endpoint that any remote-MCP client connects to — no local install.
 
-#### Using a hosted instance (bring your own key)
+#### Connecting to a BYOK deployment
 
-**A hosted instance is available at
-[mcp.renewalrelay.com](https://mcp.renewalrelay.com) — you can connect right
-now.** All you need is your own InsuranceXDate API key (any subscription
-with API access). Your requests authenticate with your key and bill your
-account; the relay uses the key per-request and never stores or logs it
-(see the landing page for the full disclosure).
+A BYOK (bring-your-own-key) deployment of this server holds no key of its
+own — each caller authenticates with their own InsuranceXDate API key (any
+subscription with API access), which is used per-request and never stored
+or logged. With `<host>` standing in for wherever the server is deployed:
 
 - **claude.ai / Claude Desktop / Cowork** — Settings → Connectors → Add
-  custom connector, URL: `https://mcp.renewalrelay.com/mcp/<your-api-key>`.
+  custom connector, URL: `https://<host>/mcp/<your-api-key>`.
   On Team/Enterprise an Owner adds it once under Organization settings →
   Connectors and every member just toggles it on. Treat the full URL as a
   credential — it contains your key.
 - **Claude Code / Cursor / Claude API** — point at
-  `https://mcp.renewalrelay.com/mcp` with header
+  `https://<host>/mcp` with header
   `Authorization: Bearer <your-api-key>`, e.g.:
 
   ```sh
-  claude mcp add --transport http insurancexdate https://mcp.renewalrelay.com/mcp \
+  claude mcp add --transport http insurancexdate https://<host>/mcp \
     --header "Authorization: Bearer <your-api-key>"
   ```
 
-Any other BYOK deployment of this server works the same way with its host
-substituted.
-
 That's the whole setup. Requests without a valid key get 401; each key is
-rate-limited (60 req/min by default).
+rate-limited (60 JSON-RPC requests/min by default — a batch counts per
+request it carries), with a host-wide backstop across all keys.
 
 **Connections are free-only by default** — the six paid tools are absent
 from the tool list entirely, so the model never even considers them. To
@@ -213,7 +209,11 @@ stateless (no session affinity). Two mutually exclusive modes:
 
 Both modes: `XDATE_DISABLE_PAID=1` disables paid tools instance-wide;
 `/healthz` for health checks; access logs record tool names, status, and
-timing — never URL paths, headers, or keys.
+timing — never URL paths, headers, or keys. Rate limiting applies in both
+modes: `MCP_RATE_LIMIT_PER_MIN` per credential (default 60, 0 disables; a
+non-numeric value refuses to start), and in BYOK mode
+`MCP_GLOBAL_RATE_LIMIT_PER_MIN` as a host-wide backstop across all keys
+(default 10× the per-key limit).
 
 ```sh
 docker build -t insurancexdate-mcp server
