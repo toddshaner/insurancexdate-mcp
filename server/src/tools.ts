@@ -341,11 +341,19 @@ export interface XdateHandlers {
  * left paid tools enabled for any other value, the opposite of the labeled
  * intent. v1.1.5 widened to the standard truthy set.
  */
-const TRUTHY_DISABLE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+const TRUTHY_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+
+/**
+ * The project-wide truthy convention (see the doc comment above for why it
+ * is tolerant). Shared by every env-flag and query-param parse so the
+ * accepted spellings can't drift between call sites.
+ */
+export function isTruthy(value: string | null | undefined): boolean {
+  return TRUTHY_VALUES.has((value ?? "").trim().toLowerCase());
+}
 
 export function paidDisabled(): boolean {
-  const value = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
-  return TRUTHY_DISABLE_VALUES.has(value);
+  return isTruthy(process.env.XDATE_DISABLE_PAID);
 }
 
 /**
@@ -356,8 +364,7 @@ export function paidDisabled(): boolean {
  */
 export function warnIfDisablePaidUnrecognized(): void {
   const raw = process.env.XDATE_DISABLE_PAID ?? "";
-  const value = raw.trim().toLowerCase();
-  if (value !== "" && !TRUTHY_DISABLE_VALUES.has(value)) {
+  if (raw.trim() !== "" && !isTruthy(raw)) {
     console.error(
       `XDATE_DISABLE_PAID is set to "${raw}", which is not a recognized disable value ` +
         `(accepted, case-insensitive: 1, true, yes, on, enabled). Paid tools remain ENABLED.`,

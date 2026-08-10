@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Remote streamable-HTTP entrypoint** (`server/dist/http.js`, README Option E): one shared HTTPS endpoint for remote MCP clients, alongside the untouched stdio entrypoint. Stateless (fresh server+transport per POST), `/healthz`, one JSON access-log line per request (methods, tools, status, duration — never URLs, headers, or keys). Two mutually exclusive auth modes: **private** (org-wide key + `MCP_PATH_TOKEN` capability URL, constant-time compare, 404 on bad token) and **BYOK** (`MCP_BYOK=1`: no server-side key; callers send their own per request via `Authorization: Bearer` or `/mcp/<key>`; neutral disclosure page at `GET /`).
+- **Rate limiting** (`server/src/rate-limit.ts`), both modes: per-credential token bucket (`MCP_RATE_LIMIT_PER_MIN`, default 60/min) charging one token per JSON-RPC request carried — a batch of N costs N. BYOK adds a host-wide backstop across all keys (`MCP_GLOBAL_RATE_LIMIT_PER_MIN`, default 10× per-key); key-level denials never charge the host bucket, and host-level denials never mint per-key buckets. Bucket map hard-capped (idle-first eviction, LRU fallback). Set-but-invalid limit values refuse to start instead of failing open.
+- **Per-caller paid-tool opt-in** over HTTP: connections are free-only (gated tools absent from `tools/list`) unless the URL carries `?paid=1`; cannot widen past the instance-wide `XDATE_DISABLE_PAID` kill switch. In free mode the gated tools are not registered at all, so models never see them.
+- **Example AWS deployment** (`deploy/pulumi/`): App Runner + ECR + SSM + Cloudflare DNS, `.env`-driven. Auto-scaling pinned to one instance by default (`MCP_MAX_INSTANCES`) and optional account-wide budget alert (`MCP_BILLING_ALERT_EMAIL`) as flood-cost caps. Secret rotation now rolls a new revision (the service config embeds SSM parameter versions), so a changed `MCP_PATH_TOKEN`/API key takes effect on `pulumi up` instead of lingering until an unrelated redeploy.
+- **Tests**: limiter unit suite (injected clock), HTTP integration suite (real server per test, localhost only), and Pulumi-mocks deploy suite (no cloud, no docker), all wired into `npm test` and CI.
+
+### Fixed
+
+- Malformed percent-encoding in the request path (e.g. `POST /mcp/%`) crashed the HTTP server process via an unhandled `URIError`; decode is now non-throwing and the handler has a catch-all (one crafted request was a remote DoS).
+
+### Changed
+
+- `createServer()` factory extracted to `server/src/server.ts`, shared by both entrypoints; tool registration behavior over stdio is unchanged (smoke test passes with the same 13-tool contract).
+- Truthy env/param parsing unified behind one exported `isTruthy()` (`"1"/"true"/"yes"/"on"/"enabled"`, case-insensitive); `?paid=` now accepts the same set as every other flag.
+
 ## [1.3.5] — 2026-07-03
 
 Pricing corrected against the account's XChange usage ledger (per-call charge log in the web UI): the day's 14 ledger charges were reconciled against a known ~23-call sequence, superseding the v1.3.4 balance-delta interpretation. Two absences remain unexplained (a fresh talkpoints call and one company's REST pulls produced no charges) and are flagged below rather than smoothed over. Also broadened the DOT-tab guidance from "trucking" to DOT-flagged (fleet operators in any industry).
