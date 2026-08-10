@@ -117,14 +117,18 @@ const accessRole = new aws.iam.Role("ecr-access", {
   ],
 });
 
-// The running container resolves runtimeEnvironmentSecrets with this role.
-const instanceRole = new aws.iam.Role("instance", {
-  assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
-    Service: "tasks.apprunner.amazonaws.com",
-  }),
-});
+// Private mode only: the container resolves runtimeEnvironmentSecrets with
+// this role. A BYOK instance reads no secrets, so it gets no instance role
+// at all.
+const instanceRole = secretParams
+  ? new aws.iam.Role("instance", {
+      assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+        Service: "tasks.apprunner.amazonaws.com",
+      }),
+    })
+  : null;
 
-if (secretParams) {
+if (secretParams && instanceRole) {
   new aws.iam.RolePolicy("instance-ssm-read", {
     role: instanceRole.id,
     policy: pulumi
@@ -175,7 +179,7 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
   instanceConfiguration: {
     cpu: "256",
     memory: "512",
-    instanceRoleArn: instanceRole.arn,
+    ...(instanceRole ? { instanceRoleArn: instanceRole.arn } : {}),
   },
   healthCheckConfiguration: {
     protocol: "HTTP",
