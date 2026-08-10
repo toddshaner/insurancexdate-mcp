@@ -58,9 +58,11 @@ parameters are created); each caller authenticates with their own
 InsuranceXDate key per request and spends their own balance. The
 `connectorUrl` output becomes a template for callers to fill in.
 
-Paid tools are disabled by default in both modes; opt back in with
-`XDATE_DISABLE_PAID=0` in `.env` (in BYOK mode callers spend their own
-accounts, so enabling them is usually right).
+Paid tools ($0.05–$0.25/call) follow the mode: **disabled by default in
+private mode** (every call spends the host's key), **enabled by default in
+BYOK mode** (callers spend their own accounts; tools are price-labeled and
+MCP clients prompt before each call). Override either way with
+`XDATE_DISABLE_PAID` in `.env` (truthy disables, falsy enables).
 
 ## Running a second endpoint (e.g. private + BYOK)
 

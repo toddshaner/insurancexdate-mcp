@@ -71,14 +71,15 @@ const zoneName = process.env.MCP_ZONE_NAME?.trim() || domain.split(".").slice(-2
 // don't churn. SSM parameter paths derive from it for the same reason.
 const serviceName = process.env.MCP_SERVICE_NAME?.trim() || "insurancexdate-mcp";
 
-// Paid tools ($0.05-$0.25/call) stay DISABLED unless explicitly re-enabled:
-// a shared instance spends one account's balance for every caller. Uses the
-// falsy mirror of the server's TRUTHY_DISABLE_VALUES (tools.ts) so
-// XDATE_DISABLE_PAID=0/false/no/off/disabled opts back in.
+// Paid tools ($0.05-$0.25/call): the mode decides the default, matching how
+// metered-API MCP servers normally work. Private mode disables them unless
+// opted in — every call spends the HOST's key. BYOK enables them — callers
+// spend their own accounts, tools are price-labeled, and the client's
+// per-tool permission prompt is the spend gate. XDATE_DISABLE_PAID set
+// explicitly overrides either way (truthy disables, falsy enables).
 const PAID_OPT_IN_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
-const disablePaid = !PAID_OPT_IN_VALUES.has(
-  (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase(),
-);
+const rawDisablePaid = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
+const disablePaid = rawDisablePaid === "" ? !byokMode : !PAID_OPT_IN_VALUES.has(rawDisablePaid);
 
 const repo = new awsx.ecr.Repository("insurancexdate-mcp", {
   forceDelete: true,
