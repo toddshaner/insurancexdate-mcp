@@ -191,11 +191,18 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
 // (a token scoped to Zone:Read + DNS:Edit on this zone).
 const zoneId = cloudflare.getZoneOutput({ filter: { name: zoneName } }).apply((z) => z.id);
 
-const domainAssociation = new aws.apprunner.CustomDomainAssociation("domain", {
-  domainName: domain,
-  serviceArn: service.arn,
-  enableWwwSubdomain: false,
-});
+const domainAssociation = new aws.apprunner.CustomDomainAssociation(
+  "domain",
+  {
+    domainName: domain,
+    serviceArn: service.arn,
+    enableWwwSubdomain: false,
+  },
+  // A domain can only be associated with one service at a time, so the
+  // default create-before-delete replacement order 400s on any service
+  // replacement. Brief domain downtime during a swap is the price.
+  { deleteBeforeReplace: true },
+);
 
 // ACM validation CNAMEs. Must stay unproxied (grey-cloud) or App Runner's
 // certificate issuance never validates. Record count is only known after the
