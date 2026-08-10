@@ -35,12 +35,21 @@ jobs:
           test -f dist/index.js
           test -f dist/tools.js
           test -f dist/xdate-client.js
+          test -f dist/http.js
+          test -f dist/rate-limit.js
           echo "All dist artifacts produced."
         working-directory: server
 
-      - name: MCP tools/list smoke test (no-network)
+      - name: Unit + HTTP integration tests, then tools/list smoke test (no-network)
         run: npm test
         working-directory: server
+
+      - name: Deploy-program test (Pulumi mocks, no cloud)
+        if: matrix.node-version == '22.x'
+        run: |
+          npm ci
+          npm test
+        working-directory: deploy/pulumi
 
       - name: Pack .mcpb (smoke test)
         run: |

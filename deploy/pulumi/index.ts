@@ -81,6 +81,28 @@ const PAID_OPT_IN_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
 const rawDisablePaid = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
 const disablePaid = rawDisablePaid === "" ? !byokMode : !PAID_OPT_IN_VALUES.has(rawDisablePaid);
 
+// Cost guardrails. App Runner's DEFAULT auto-scaling config runs up to 25
+// instances, so a sustained request flood (the endpoint is directly
+// reachable — the Cloudflare record is deliberately unproxied) scales the
+// bill ~25x. One small instance serves this workload fine and caps the
+// worst-case flood cost at roughly $15/month; raise MCP_MAX_INSTANCES only
+// with intent. Note the server's rate limiter is per-process, so instance
+// count also multiplies the effective rate limits.
+const rawMaxInstances = process.env.MCP_MAX_INSTANCES?.trim() || "1";
+const maxInstances = Number(rawMaxInstances);
+if (!Number.isInteger(maxInstances) || maxInstances < 1) {
+  throw new Error(`MCP_MAX_INSTANCES must be a positive integer; got ${JSON.stringify(rawMaxInstances)}.`);
+}
+
+// Optional monthly cost budget with email alerts (ACCOUNT-wide spend, not
+// just this service — AWS cost data can't be scoped to one App Runner
+// service reliably). Created only when an alert address is configured.
+const billingAlertEmail = process.env.MCP_BILLING_ALERT_EMAIL?.trim() || null;
+const rawBudgetUsd = process.env.MCP_MONTHLY_BUDGET_USD?.trim() || "50";
+if (billingAlertEmail && !(Number(rawBudgetUsd) > 0)) {
+  throw new Error(`MCP_MONTHLY_BUDGET_USD must be a positive number; got ${JSON.stringify(rawBudgetUsd)}.`);
+}
+
 const repo = new awsx.ecr.Repository("insurancexdate-mcp", {
   forceDelete: true,
 });
@@ -149,8 +171,15 @@ if (secretParams && instanceRole) {
   });
 }
 
+const scalingConfig = new aws.apprunner.AutoScalingConfigurationVersion("scaling", {
+  autoScalingConfigurationName: serviceName.slice(0, 32),
+  minSize: 1,
+  maxSize: maxInstances,
+});
+
 const service = new aws.apprunner.Service("insurancexdate-mcp", {
   serviceName,
+  autoScalingConfigurationArn: scalingConfig.arn,
   sourceConfiguration: {
     autoDeploymentsEnabled: false,
     authenticationConfiguration: { accessRoleArn: accessRole.arn },
@@ -166,6 +195,20 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
           ...(byokMode ? { MCP_BYOK: "1" } : {}),
           ...(process.env.MCP_RATE_LIMIT_PER_MIN?.trim()
             ? { MCP_RATE_LIMIT_PER_MIN: process.env.MCP_RATE_LIMIT_PER_MIN.trim() }
+            : {}),
+          ...(process.env.MCP_GLOBAL_RATE_LIMIT_PER_MIN?.trim()
+            ? { MCP_GLOBAL_RATE_LIMIT_PER_MIN: process.env.MCP_GLOBAL_RATE_LIMIT_PER_MIN.trim() }
+            : {}),
+          // App Runner resolves runtimeEnvironmentSecrets when it deploys a
+          // revision, not on each read: rotating the SSM value alone leaves
+          // the OLD secret live until something else forces a deployment.
+          // Surfacing the parameter versions here makes every rotation a
+          // service diff, so `pulumi up` rolls a revision that re-resolves
+          // them. The container ignores this variable.
+          ...(secretParams
+            ? {
+                MCP_SECRETS_VERSION: pulumi.interpolate`${secretParams.apiKey.version}-${secretParams.pathToken.version}`,
+              }
             : {}),
         },
         runtimeEnvironmentSecrets: secretParams
@@ -234,6 +277,35 @@ new cloudflare.DnsRecord("mcp-cname", {
   ttl: 300,
   proxied: false,
 });
+
+// Bill-shock alarm: email at 80% actual and 100% forecasted of the monthly
+// budget. Account-wide by design — a flood that scales some OTHER resource
+// should still page. Requires no console setup; Budgets is free for the
+// first two budgets per account.
+if (billingAlertEmail) {
+  new aws.budgets.Budget("monthly-cost", {
+    budgetType: "COST",
+    timeUnit: "MONTHLY",
+    limitAmount: rawBudgetUsd,
+    limitUnit: "USD",
+    notifications: [
+      {
+        comparisonOperator: "GREATER_THAN",
+        threshold: 80,
+        thresholdType: "PERCENTAGE",
+        notificationType: "ACTUAL",
+        subscriberEmailAddresses: [billingAlertEmail],
+      },
+      {
+        comparisonOperator: "GREATER_THAN",
+        threshold: 100,
+        thresholdType: "PERCENTAGE",
+        notificationType: "FORECASTED",
+        subscriberEmailAddresses: [billingAlertEmail],
+      },
+    ],
+  });
+}
 
 export const serviceUrl = pulumi.interpolate`https://${service.serviceUrl}`;
 // Private mode: contains the path token — a capability URL. Paste into

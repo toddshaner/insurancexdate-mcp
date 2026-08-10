@@ -53,6 +53,11 @@ credential: share it only through the org connector config, and rotate it by
 changing `MCP_PATH_TOKEN` in `.env` + `./up.sh` if it leaks. Every request
 an attacker could make with the URL spends your InsuranceXDate balance.
 
+Rotation takes effect on the `./up.sh` run itself: the service config embeds
+the SSM parameter versions (`MCP_SECRETS_VERSION`), so a changed secret is a
+service diff and App Runner rolls a new revision that resolves the new
+values. Until that deployment finishes, the old token still answers.
+
 **BYOK** (`MCP_BYOK=1`): the deployment stores no key anywhere (no SSM
 parameters are created); each caller authenticates with their own
 InsuranceXDate key per request and spends their own balance. The
@@ -84,6 +89,26 @@ cp .env.example .env.byok   # MCP_STACK=byok, MCP_BYOK=1,
 Set `MCP_STACK` in every env file (including `.env`) — `up.sh` selects that
 stack before running, so one file's values can never deploy into another
 file's stack via a stale `pulumi stack select`.
+
+## Cost guardrails
+
+The endpoint is directly reachable (the Cloudflare record is deliberately
+unproxied — proxying would let Cloudflare read callers' keys in URLs and
+headers), so assume anyone can flood it. Two caps bound what that can cost:
+
+- **Auto-scaling is pinned to one instance** (`MCP_MAX_INSTANCES`, default
+  1). App Runner's default config scales to 25 instances under load; pinned
+  to one small instance, a sustained flood costs roughly $15/month at worst
+  instead of ~25x that. One instance easily serves an org's MCP traffic,
+  and the server's per-process rate limits stay exact instead of
+  multiplying per instance.
+- **Optional billing alert**: set `MCP_BILLING_ALERT_EMAIL` (and optionally
+  `MCP_MONTHLY_BUDGET_USD`, default 50) to create an account-wide AWS
+  monthly cost budget that emails at 80% actual / 100% forecasted spend.
+
+Upstream InsuranceXDate spend is protected separately: private mode is
+dark without the path token, BYOK spends only callers' own keys, and both
+modes are rate-limited (see the root README's Option E).
 
 ## Traffic visibility
 

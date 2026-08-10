@@ -2,6 +2,9 @@
   "name": "insurancexdate-mcp-deploy",
   "private": true,
   "type": "commonjs",
+  "scripts": {
+    "test": "tsc -p tsconfig.test.json && node --test bin-test/test/*.test.js"
+  },
   "devDependencies": {
     "@types/node": "^22.19.17",
     "typescript": "^5.9.3"

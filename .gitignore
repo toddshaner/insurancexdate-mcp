@@ -45,3 +45,6 @@ Engineering memo.md
 reference/
 support-tickets/
 ziVrj0zN
+
+# Deploy-test build output (deploy/pulumi npm test)
+deploy/pulumi/bin-test/
