@@ -28,13 +28,24 @@
  *     connectors - the Zapier-style capability URL)
  * The key IS the auth: a request without a valid-shaped key gets 401.
  *
+ * Rate limiting (both modes; see rate-limit.ts): a per-credential token
+ * bucket - the caller's key in BYOK mode, the path token in private mode -
+ * charged one token per JSON-RPC request the POST body carries, so a batch
+ * of N costs N. BYOK mode adds a host-wide backstop bucket across all keys,
+ * since anyone can mint fresh valid-shaped keys; private mode has a single
+ * credential, so the per-credential bucket already is the host-wide cap.
+ * A set-but-invalid limit value refuses to start (fail closed).
+ *
  * Env: PORT (defaults to DEFAULT_PORT), XDATE_DISABLE_PAID (optional,
  * instance-wide, see tools.ts). Private mode: INSURANCEXDATE_API_KEY and
  * MCP_PATH_TOKEN (>=16 chars) required. BYOK mode: MCP_BYOK=1 (private-mode
- * vars, if also present, are ignored with a warning); MCP_RATE_LIMIT_PER_MIN
- * tunes the per-key rate limit (defaults to DEFAULT_RATE_LIMIT_PER_MIN,
- * 0 disables). BYOK mode also serves a neutral disclosure page at GET /;
- * private instances stay dark on every non-MCP path.
+ * vars, if also present, are ignored with a warning). Both modes:
+ * MCP_RATE_LIMIT_PER_MIN tunes the per-credential limit (defaults to
+ * DEFAULT_RATE_LIMIT_PER_MIN, 0 disables). BYOK mode:
+ * MCP_GLOBAL_RATE_LIMIT_PER_MIN tunes the host-wide backstop (defaults to
+ * GLOBAL_RATE_LIMIT_MULTIPLIER x the per-credential limit, 0 disables).
+ * BYOK mode also serves a neutral disclosure page at GET /; private
+ * instances stay dark on every non-MCP path.
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -42,6 +53,13 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
+import {
+  DEFAULT_RATE_LIMIT_PER_MIN,
+  GLOBAL_RATE_LIMIT_MULTIPLIER,
+  parseRateLimit,
+  RateLimiter,
+  requestCost,
+} from "./rate-limit.js";
 import { API_KEY_CHARSET, createServer, readApiKeyOrExit } from "./server.js";
 import { warnIfDisablePaidUnrecognized } from "./tools.js";
 import { XdateClient } from "./xdate-client.js";
@@ -56,40 +74,6 @@ const MIN_BYOK_KEY_LENGTH = 8;
 const MAX_BYOK_KEY_LENGTH = 256;
 
 const BYOK_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
-
-// BYOK-mode rate limit, per caller key, requests per minute. Protects the
-// upstream API (and every caller's account standing) from a runaway agent.
-// Override with MCP_RATE_LIMIT_PER_MIN; 0 disables. Token-bucket state is
-// per-process — good enough for a single-instance deployment; a horizontally
-// scaled fleet multiplies the effective limit by the instance count.
-const DEFAULT_RATE_LIMIT_PER_MIN = 60;
-const MAX_TRACKED_BUCKETS = 10_000;
-
-type Bucket = { tokens: number; last: number };
-const buckets = new Map<string, Bucket>();
-
-function rateLimitAllows(credential: string, limitPerMin: number): boolean {
-  if (limitPerMin <= 0) return true;
-  // Hash so raw caller keys are never retained as long-lived map keys.
-  const id = createHash("sha256").update(credential).digest("base64url").slice(0, 16);
-  const now = performance.now();
-  let bucket = buckets.get(id);
-  if (!bucket) {
-    if (buckets.size >= MAX_TRACKED_BUCKETS) {
-      for (const [key, b] of buckets) {
-        if (b.tokens >= limitPerMin) buckets.delete(key);
-        if (buckets.size < MAX_TRACKED_BUCKETS) break;
-      }
-    }
-    bucket = { tokens: limitPerMin, last: now };
-    buckets.set(id, bucket);
-  }
-  bucket.tokens = Math.min(limitPerMin, bucket.tokens + ((now - bucket.last) / 60_000) * limitPerMin);
-  bucket.last = now;
-  if (bucket.tokens < 1) return false;
-  bucket.tokens -= 1;
-  return true;
-}
 
 // Served at GET / in BYOK mode only: a neutral disclosure page so the
 // endpoint is accountable without being attributable. Private instances
@@ -129,10 +113,42 @@ function readPathTokenOrExit(): string {
   return token;
 }
 
+/**
+ * Reads a rate-limit env var: unset/blank means the given default; a value
+ * that doesn't parse as a non-negative number refuses to start. Failing open
+ * here (the pre-fix behavior: Number("abc") is NaN, and NaN comparisons let
+ * every request through) would silently disable the limiter on a typo.
+ */
+function readRateLimitOrExit(name: string, defaultPerMin: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return defaultPerMin;
+  const value = parseRateLimit(raw);
+  if (value === null) {
+    console.error(
+      `${name} must be a non-negative number of requests per minute (0 disables); got ${JSON.stringify(raw)}. Refusing to start with an unenforceable rate limit.`,
+    );
+    process.exit(1);
+  }
+  return value;
+}
+
 function tokenMatches(candidate: string, token: string): boolean {
   const a = Buffer.from(candidate);
   const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * decodeURIComponent that returns null on malformed percent-encoding instead
+ * of throwing. The raw form throws URIError on e.g. /mcp/%, which - unhandled
+ * in the request path - killed the whole process (one crafted request = DoS).
+ */
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -143,7 +159,7 @@ function tokenMatches(candidate: string, token: string): boolean {
 function byokCredential(req: IncomingMessage, pathSegment: string | null): string | null {
   const header = req.headers.authorization;
   const bearer = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : null;
-  const candidate = bearer || (pathSegment ? decodeURIComponent(pathSegment) : null);
+  const candidate = bearer || (pathSegment ? safeDecodeURIComponent(pathSegment) : null);
   if (
     !candidate ||
     candidate.length < MIN_BYOK_KEY_LENGTH ||
@@ -153,6 +169,17 @@ function byokCredential(req: IncomingMessage, pathSegment: string | null): strin
     return null;
   }
   return candidate;
+}
+
+/** Bucket id for a credential: hashed so raw keys never sit in a long-lived map. */
+function bucketId(credential: string): string {
+  return createHash("sha256").update(credential).digest("base64url").slice(0, 16);
+}
+
+function jsonRpcError(res: ServerResponse, status: number, code: number, message: string, headers?: Record<string, string>): void {
+  res
+    .writeHead(status, { "content-type": "application/json", ...headers })
+    .end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
@@ -208,9 +235,17 @@ async function main() {
   warnIfDisablePaidUnrecognized();
 
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
-  const rateLimitPerMin = Number(process.env.MCP_RATE_LIMIT_PER_MIN ?? DEFAULT_RATE_LIMIT_PER_MIN);
+  const rateLimitPerMin = readRateLimitOrExit("MCP_RATE_LIMIT_PER_MIN", DEFAULT_RATE_LIMIT_PER_MIN);
+  const keyLimiter = new RateLimiter(rateLimitPerMin);
+  // BYOK only: fabricated keys each mint a fresh per-key bucket, so a
+  // host-wide bucket caps the total. Private mode's single credential makes
+  // the per-credential bucket host-wide already.
+  const globalLimitPerMin = byokMode
+    ? readRateLimitOrExit("MCP_GLOBAL_RATE_LIMIT_PER_MIN", rateLimitPerMin * GLOBAL_RATE_LIMIT_MULTIPLIER)
+    : 0;
+  const globalLimiter = new RateLimiter(globalLimitPerMin);
 
-  const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const started = performance.now();
     const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -228,61 +263,42 @@ async function main() {
     const pathSegment = pathMatch?.[1] ?? null;
 
     let client: XdateClient;
+    let credential: string;
     if (byokMode) {
       if (!pathMatch) {
         res.writeHead(404, { "content-type": "text/plain" }).end("not found");
         return;
       }
-      const credential = byokCredential(req, pathSegment);
-      if (!credential) {
+      const callerKey = byokCredential(req, pathSegment);
+      if (!callerKey) {
         // Missing/implausible key. 401 so MCP clients surface "auth needed"
         // rather than a generic failure.
-        res
-          .writeHead(401, { "content-type": "application/json" })
-          .end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              error: {
-                code: -32000,
-                message:
-                  "This is a bring-your-own-key server: send your InsuranceXDate API key as `Authorization: Bearer <key>` to /mcp, or use the URL form /mcp/<key>.",
-              },
-              id: null,
-            }),
-          );
-        return;
-      }
-      if (!rateLimitAllows(credential, rateLimitPerMin)) {
-        res
-          .writeHead(429, { "content-type": "application/json", "retry-after": "60" })
-          .end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32000, message: "Rate limit exceeded for this key. Retry shortly." },
-              id: null,
-            }),
-          );
-        console.log(
-          JSON.stringify({ evt: "request", status: 429, rateLimited: true, durationMs: Math.round(performance.now() - started) }),
+        jsonRpcError(
+          res,
+          401,
+          -32000,
+          "This is a bring-your-own-key server: send your InsuranceXDate API key as `Authorization: Bearer <key>` to /mcp, or use the URL form /mcp/<key>.",
         );
         return;
       }
-      client = new XdateClient(credential);
+      credential = callerKey;
+      client = new XdateClient(callerKey);
     } else {
       // Private mode: 404 (not 401/403) for a bad or missing token - don't
-      // confirm the path shape to scanners.
-      if (!pathSegment || !pathToken || !tokenMatches(decodeURIComponent(pathSegment), pathToken)) {
+      // confirm the path shape to scanners. A malformed percent-encoding
+      // decodes to null and lands here too.
+      const decoded = pathSegment ? safeDecodeURIComponent(pathSegment) : null;
+      if (!decoded || !pathToken || !tokenMatches(decoded, pathToken)) {
         res.writeHead(404, { "content-type": "text/plain" }).end("not found");
         return;
       }
+      credential = pathToken;
       client = sharedClient as XdateClient;
     }
 
     if (req.method !== "POST") {
       // Stateless mode has no GET event stream and no DELETE-able session.
-      res
-        .writeHead(405, { "content-type": "application/json", allow: "POST" })
-        .end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null }));
+      jsonRpcError(res, 405, -32000, "Method not allowed", { allow: "POST" });
       return;
     }
 
@@ -290,10 +306,38 @@ async function main() {
     try {
       body = await readBody(req);
     } catch (err) {
-      res
-        .writeHead(400, { "content-type": "application/json" })
-        .end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }));
+      jsonRpcError(res, 400, -32700, "Parse error");
       console.log(JSON.stringify({ evt: "request", status: 400, error: err instanceof Error ? err.message : "parse", durationMs: Math.round(performance.now() - started) }));
+      return;
+    }
+
+    // Rate limiting sits after body parse so a JSON-RPC batch is charged per
+    // request it carries - a batch of N costs N tokens, not 1. The host-wide
+    // backstop is charged first; a request denied there never touches (or
+    // creates) a per-key bucket.
+    const cost = requestCost(body);
+    const globallyAllowed = globalLimiter.allow("host", cost);
+    const allowed = globallyAllowed && keyLimiter.allow(bucketId(credential), cost);
+    if (!allowed) {
+      jsonRpcError(
+        res,
+        429,
+        -32000,
+        globallyAllowed
+          ? "Rate limit exceeded for this key. Retry shortly."
+          : "Server is over its global rate limit. Retry shortly.",
+        { "retry-after": "60" },
+      );
+      console.log(
+        JSON.stringify({
+          evt: "request",
+          status: 429,
+          rateLimited: true,
+          scope: globallyAllowed ? "key" : "global",
+          cost,
+          durationMs: Math.round(performance.now() - started),
+        }),
+      );
       return;
     }
 
@@ -327,21 +371,29 @@ async function main() {
       void server.close();
     });
 
-    try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
-    } catch (err) {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+  };
+
+  const httpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
+    // Catch-all so no request - malformed URL, transport edge case, future
+    // handler bug - can become an unhandled rejection that kills the process.
+    handleRequest(req, res).catch((err) => {
       console.error("insurancexdate HTTP handler error:", err);
       if (!res.headersSent) {
-        res
-          .writeHead(500, { "content-type": "application/json" })
-          .end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }));
+        jsonRpcError(res, 500, -32603, "Internal server error");
+      } else {
+        res.end();
       }
-    }
+    });
   });
 
   httpServer.listen(port, () => {
-    console.log(JSON.stringify({ evt: "listening", port, mode: byokMode ? "byok" : "private" }));
+    // Report the bound port, not the requested one, so PORT=0 (ephemeral,
+    // used by the integration tests) logs something connectable.
+    const address = httpServer.address();
+    const boundPort = typeof address === "object" && address !== null ? address.port : port;
+    console.log(JSON.stringify({ evt: "listening", port: boundPort, mode: byokMode ? "byok" : "private" }));
   });
 }
 
