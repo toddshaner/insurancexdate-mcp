@@ -1,6 +1,6 @@
 {
   "name": "insurancexdate-mcp",
-  "version": "1.3.5",
+  "version": "1.4.0",
   "description": "InsuranceXDate REST proxy MCP server. Bypasses upstream MCP bugs at /api2/McpData by translating MCP-style param names and routing search and match to the working REST endpoints at /api2/Search and /api2/Match.",
   "private": true,
   "type": "module",
@@ -11,10 +11,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node scripts/smoke-test-tools-list.mjs"
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs && node scripts/smoke-test-tools-list.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {

@@ -9,6 +9,14 @@ server/dist/
 # Packed extension (cut a GitHub Release with the .mcpb attached instead)
 *.mcpb
 
+# Pulumi stack config (holds deployer-specific domain + encrypted secrets;
+# Pulumi.yaml itself stays tracked)
+deploy/pulumi/Pulumi.*.yaml
+
+# Per-stack env files (real keys/tokens); only the example is tracked
+deploy/pulumi/.env*
+!deploy/pulumi/.env.example
+
 # Editor / OS
 .DS_Store
 Thumbs.db
@@ -37,3 +45,6 @@ Engineering memo.md
 reference/
 support-tickets/
 ziVrj0zN
+
+# Deploy-test build output (deploy/pulumi npm test)
+deploy/pulumi/bin-test/

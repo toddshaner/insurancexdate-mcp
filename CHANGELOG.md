@@ -4,6 +4,26 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — Unreleased
+
+### Added
+
+- **Remote streamable-HTTP entrypoint** (`server/dist/http.js`, README Option E): stateless remote MCP endpoint alongside stdio, with `/healthz` and structured diagnostics for accepted authenticated POSTs plus selected error paths. Two mutually exclusive modes: **private** (single-operator vendor key + `MCP_PATH_TOKEN` bearer capability; not per-user authentication) and **BYOK** (`MCP_BYOK=1`: no server-side vendor key; individual callers supply their own authorized credential). Exact Host and Origin allowlists are required for MCP traffic.
+- **Rate limiting** (`server/src/rate-limit.ts`), both modes: per-credential token bucket (`MCP_RATE_LIMIT_PER_MIN`, default 60/min) charging one token per JSON-RPC request carried — a batch of N costs N. BYOK adds a host-wide backstop across all keys (`MCP_GLOBAL_RATE_LIMIT_PER_MIN`, default 10× per-key); key-level denials never charge the host bucket, and host-level denials never mint per-key buckets. Bucket map hard-capped (idle-first eviction, LRU fallback). Set-but-invalid limit values refuse to start instead of failing open.
+- **Default-deny paid tools** across stdio and HTTP: gated tools are absent from `tools/list` unless the operator explicitly sets `XDATE_DISABLE_PAID=0`; HTTP callers must also put `?paid=1` on the connection URL. Blank, true, and unrecognized settings remain disabled, so configuration errors fail closed.
+- **Example AWS deployment** (`deploy/pulumi/`): App Runner + ECR + SSM + Cloudflare DNS, `.env`-driven. Auto-scaling defaults to one instance (`MCP_MAX_INSTANCES`) to bound concurrency; an optional account-wide AWS Budget sends alerts but neither setting caps spend. Secret rotation rolls a new revision, SSM policy attachment is an explicit service dependency, paid tools default off in both HTTP modes, ECR scans on push with immutable tags, and `MCP_STACK` is mandatory. AWS says App Runner is no longer open to new customers, so the stack is limited to accounts with existing access.
+- **Tests**: limiter unit suite (injected clock), HTTP integration suite (real server per test, localhost only), and Pulumi-mocks deploy suite (no cloud, no docker), all wired into `npm test` and CI.
+
+### Fixed
+
+- Malformed percent-encoding in the request path (e.g. `POST /mcp/%`) crashed the HTTP server process via an unhandled `URIError`; decode is now non-throwing and the handler has a catch-all (one crafted request was a remote DoS).
+
+### Changed
+
+- `createServer()` factory extracted to `server/src/server.ts`, shared by both entrypoints. Stdio now exposes the seven free tools by default; the full 13-tool contract requires explicit operator opt-in with `XDATE_DISABLE_PAID=0`.
+- Package metadata moved to 1.4.0 for the new remote entrypoint. CI now uses read-only permissions, commit-pinned actions, an exact MCPB CLI version, production dependency audit gates, and archive-content assertions that reject deployment, test, review, and secret-bearing files.
+- Truthy env/param parsing unified behind one exported `isTruthy()` (`"1"/"true"/"yes"/"on"/"enabled"`, case-insensitive); `?paid=` now accepts the same set as every other flag.
+
 ## [1.3.5] — 2026-07-03
 
 Pricing corrected against the account's XChange usage ledger (per-call charge log in the web UI): the day's 14 ledger charges were reconciled against a known ~23-call sequence, superseding the v1.3.4 balance-delta interpretation. Two absences remain unexplained (a fresh talkpoints call and one company's REST pulls produced no charges) and are flagged below rather than smoothed over. Also broadened the DOT-tab guidance from "trucking" to DOT-flagged (fleet operators in any industry).
@@ -274,6 +294,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
+[1.4.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.3.5...HEAD
 [1.3.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.5
 [1.3.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.4
 [1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3

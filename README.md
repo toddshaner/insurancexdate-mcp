@@ -4,7 +4,7 @@ A TypeScript [Model Context Protocol](https://modelcontextprotocol.io) server th
 
 > Unofficial third-party client. Not affiliated with InsuranceXDate. MIT licensed. Personal project — PRs welcome but no SLA on response times.
 
-Built on `@modelcontextprotocol/sdk` v1.29, Node 20+. Ships as both a pre-packaged Anthropic [`.mcpb` Desktop Extension](https://www.anthropic.com/engineering/desktop-extensions) for one-click install on Claude Desktop, and as plain Node source you can wire into any other MCP client's config.
+Built on the lockfile-pinned `@modelcontextprotocol/sdk`, Node 20+. Ships as both a pre-packaged Anthropic [`.mcpb` Desktop Extension](https://www.anthropic.com/engineering/desktop-extensions) for one-click install on Claude Desktop, and as plain Node source you can wire into any other MCP client's config.
 
 ## What it does
 
@@ -59,11 +59,11 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 ### Production-grade defaults
 
 - **HTTP timeout:** 30s via `AbortSignal.timeout()` so slow upstream calls surface as clean errors instead of silent hangs
-- **HTTP error handling:** non-2xx responses throw with status + body excerpt. Wrapper returns `isError: true` MCP results rather than wrapping error bodies as success
+- **HTTP error handling:** non-2xx and oversized upstream responses surface as stable `isError: true` MCP results without exposing upstream body or cause details
 - **`structuredContent`:** `search` and `match` return both `content` (text JSON fallback) and typed `structuredContent` so LLMs can reason over records without re-parsing
 - **URL-decode for UIDs:** company UIDs from `/api2/Search` come URL-encoded (`%2B`, `%2F`); wrapper decodes before forwarding to upstream MCP for paid lookups, which expect raw `+`/`/`
 - **Schema validation:** zod-validated input on every tool (state codes uppercase regex, dates MM-DD regex, premium/mod numeric, employee band 0-9, addloptions/policyoptions enum)
-- **Gated-tool switch:** set `XDATE_DISABLE_PAID=1` (also accepts `true` / `yes` / `on` / `enabled`, case-insensitive) in env to short-circuit the six gated tools — `company_details` ($0.25), `talkpoints` ($0.10), `serff_filing` ($0.10), `serff_search` ($0.05 ledger-confirmed 2026-07-03, no dedupe), `group_companies` and `run_saved_search` (unverified stored-content executors) — with `isError` responses. Any other non-empty value leaves gated tools enabled and logs a startup warning to stderr. The seven always-free tools (`search`, `match`, `filter`, `benefits_search`, `flagged_companies`, `groups`, `saved_searches`) stay enabled; note the account-read tools among them still expose agency flag/pipeline lists to any connected client
+- **Paid tools default denied:** the six gated tools are omitted from `tools/list` unless an operator explicitly sets `XDATE_DISABLE_PAID=0` (also accepts `false` / `no` / `off`, case-insensitive). Blank, true, and unrecognized values keep them disabled. The seven always-free tools stay enabled; account-read tools among them still expose agency flag/pipeline lists to the connected client
 - **Sensitive credential storage:** when installed via `.mcpb` on Claude Desktop, the API key flows through `user_config.api_key` with `"sensitive": true` and is stored in the OS keychain (Windows Credential Manager / macOS Keychain). On other MCP clients the server reads `INSURANCEXDATE_API_KEY` from `process.env`, so use whatever secret-handling pattern your client supports (env-var injection, secret store, etc.) — never hard-code keys in JSON config files committed to source control
 
 ## Install
@@ -140,7 +140,7 @@ The server speaks standard MCP JSON-RPC on stdio. Anything that follows the prot
 ```sh
 git clone https://github.com/toddshaner/insurancexdate-mcp.git
 cd insurancexdate-mcp/server
-npm install
+npm ci
 npm run build               # tsc emits server/dist/*.js (noEmitOnError prevents broken builds)
 ```
 
@@ -150,10 +150,70 @@ To repack the `.mcpb` for Claude Desktop after a source change:
 
 ```sh
 cd ..                       # back to repo root
-npx -y @anthropic-ai/mcpb pack .
+npx -y @anthropic-ai/mcpb@2.1.2 pack .
 ```
 
 For a slimmer `.mcpb`, run `npm prune --omit=dev` after build to strip TypeScript and `@types/*` from `node_modules` — `.mcpbignore` covers them anyway, but pruning is cleaner.
+
+### Option E: Remote server (streamable HTTP)
+
+Options A–D run locally. Option E hosts `server/dist/http.js` for a compatible
+remote-MCP client. It is stateless and has two mutually exclusive modes:
+
+- **BYOK** (`MCP_BYOK=1`): the server stores no vendor key. Each individual
+  caller supplies their own vendor-authorized InsuranceXDate key by Bearer
+  header or user-scoped URL configuration.
+- **Private**: one operator's `INSURANCEXDATE_API_KEY` is protected by a secret
+  `MCP_PATH_TOKEN` (minimum 16 characters). The path token is a bearer
+  capability, not multi-user authentication: it has no per-user identity,
+  revocation, quota, or attribution. Do not present it as a safe shared-org
+  auth layer.
+
+Do not place one user's API key in an organization-wide connector URL.
+InsuranceXDate's [MCP guide](https://insurancexdate.helpjuice.com/en_US/integrations/mcp)
+describes user-specific keys, and its
+[Terms of Service](https://www.insurancexdate.com/terms-of-service/) restrict
+credential sharing. For multiple users, require individual client
+configuration, an InsuranceXDate-native/OAuth flow, or explicit vendor-approved
+delegation behind a real identity gateway. If a client only supports one shared
+organization URL, this BYOK implementation cannot provide per-user identity or
+credential exchange.
+
+Remote HTTP startup requires exact allowlists. `MCP_ALLOWED_HOSTS` is a
+comma-separated list of `host[:port]`; `MCP_ALLOWED_ORIGINS` is a comma-separated
+list of absolute origins. A present Origin must match exactly. Requests without
+Origin are accepted only after Host validation succeeds. A host entry without a
+port accepts that exact host with any numeric port; use `host:port` to require a
+specific port. `/healthz` is exempt for platform health probes.
+
+Paid tools default disabled in the provided Pulumi deployment in both modes.
+The operator must explicitly set `XDATE_DISABLE_PAID=0` to expose them; then a
+connection's `?paid=1` expresses caller intent. It cannot override an
+operator-level disable. MCP clients are not guaranteed to prompt before each
+call, so use the operator-level disable and independently monitored budgets
+rather than relying on client UI.
+
+Rate limiting applies per credential and, in BYOK, across the host. Operational
+JSON logs cover accepted authenticated POSTs and selected errors/rejections,
+not every HTTP request or per-user attribution. Treat them as diagnostics, not
+a complete audit log.
+
+```sh
+docker build -t insurancexdate-mcp server
+docker run --rm -p 8080:8080 \
+  -e MCP_ALLOWED_HOSTS=localhost:8080,127.0.0.1:8080 \
+  -e MCP_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
+  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 insurancexdate-mcp
+```
+
+Without Docker, set the same allowlist variables before running
+`node server/dist/http.js` (`PORT` defaults to 8080).
+
+The included Pulumi example targets AWS App Runner. AWS says App Runner is no
+longer open to new customers; it is usable only in accounts with existing
+access. New customers need another container host. See
+[`deploy/pulumi/`](deploy/pulumi/README.md) for the availability warning and
+deployment controls.
 
 ## Usage examples
 

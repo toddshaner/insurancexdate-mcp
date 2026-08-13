@@ -1,10 +1,23 @@
 server/src/**
 server/tsconfig.json
+server/test/**
+server/scripts/**
+server/Dockerfile
+server/.dockerignore
 server/node_modules/typescript/**
 server/node_modules/@types/**
 server/node_modules/.bin/**
+server/node_modules/.package-lock.json
 **/*.map
 **/*.ts
+.agent-review/**
+.github/**
+deploy/**
+.git/**
+.env
+.env.*
+**/*.pem
+**/*.key
 README.md
 Engineering memo.md
 reference/**

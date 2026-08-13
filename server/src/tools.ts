@@ -319,10 +319,11 @@ export interface XdateHandlers {
 }
 
 /**
- * Emergency brake: if XDATE_DISABLE_PAID is a truthy string in env, gated tools
- * return isError without hitting the network. Defense-in-depth for environments
- * where the client should only have access to free reads (e.g. evaluation,
- * demos, or untrusted MCP clients without their own confirmation gates).
+ * Paid tools fail closed. They are enabled only when XDATE_DISABLE_PAID is an
+ * explicit false value; otherwise gated tools return isError without hitting
+ * the network. Defense-in-depth for environments where the client should only
+ * have access to free reads (e.g. evaluation, demos, or untrusted MCP clients
+ * without their own confirmation gates).
  * Gated: the priced tools (company_details $0.25, talkpoints $0.10,
  * serff_filing $0.10, serff_search $0.05 — all LEDGER-CONFIRMED 2026-07-03;
  * the metadata's "serff_search is free" claim was disproven by 9 ledger
@@ -334,33 +335,38 @@ export interface XdateHandlers {
  * groups, saved_searches) are always enabled — note the account-read tools
  * still expose the agency's flag/pipeline lists to any connected client.
  *
- * Tolerant truthy parsing: accepts "1", "true", "yes", "on", "enabled"
- * (case-insensitive, whitespace-trimmed). A user setting a "safety switch"
- * via the .mcpb install-dialog string field may reasonably enter "true" or
- * "yes" and expect that to count; v1.1.4 was strict-"1"-only and silently
- * left paid tools enabled for any other value, the opposite of the labeled
- * intent. v1.1.5 widened to the standard truthy set.
+ * Tolerant parsing is case-insensitive and whitespace-trimmed. Disable values
+ * are "1", "true", "yes", "on", and "enabled". The only enable values are
+ * "0", "false", "no", and "off". Blank and unrecognized values stay disabled.
  */
-const TRUTHY_DISABLE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+const TRUTHY_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+const EXPLICIT_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
-function paidDisabled(): boolean {
-  const value = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
-  return TRUTHY_DISABLE_VALUES.has(value);
+/**
+ * The project-wide truthy convention (see the doc comment above for why it
+ * is tolerant). Shared by every env-flag and query-param parse so the
+ * accepted spellings can't drift between call sites.
+ */
+export function isTruthy(value: string | null | undefined): boolean {
+  return TRUTHY_VALUES.has((value ?? "").trim().toLowerCase());
+}
+
+export function paidDisabled(): boolean {
+  return !EXPLICIT_FALSE_VALUES.has((process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase());
 }
 
 /**
- * One-shot startup check: a non-empty XDATE_DISABLE_PAID outside the truthy
- * set silently fails OPEN (paid tools stay enabled), the opposite of what a
- * user setting a "safety switch" intends. Warn on stderr — never stdout on a
- * stdio MCP server. Called once from index.ts main().
+ * One-shot startup check for an unrecognized non-empty value. It fails closed,
+ * but the warning makes the configuration error visible. Never write the raw
+ * value because environment configuration can itself contain sensitive data.
  */
 export function warnIfDisablePaidUnrecognized(): void {
   const raw = process.env.XDATE_DISABLE_PAID ?? "";
-  const value = raw.trim().toLowerCase();
-  if (value !== "" && !TRUTHY_DISABLE_VALUES.has(value)) {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized !== "" && !TRUTHY_VALUES.has(normalized) && !EXPLICIT_FALSE_VALUES.has(normalized)) {
     console.error(
-      `XDATE_DISABLE_PAID is set to "${raw}", which is not a recognized disable value ` +
-        `(accepted, case-insensitive: 1, true, yes, on, enabled). Paid tools remain ENABLED.`,
+      "XDATE_DISABLE_PAID has an unrecognized value; paid tools remain disabled. " +
+        "Use 0/false/no/off only when paid tools are explicitly authorized.",
     );
   }
 }
@@ -369,7 +375,7 @@ const PAID_DISABLED_RESULT: CallToolResult = {
   content: [
     {
       type: "text",
-      text: "Gated XDate tools are disabled in this environment (XDATE_DISABLE_PAID is set). Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — ledger-confirmed 2026-07-03, despite vendor metadata claiming free), group_companies and run_saved_search (unverified stored-content executors). Clear the 'Disable paid tools' extension setting or unset the env var to re-enable, or use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
+      text: "Gated XDate tools are disabled in this environment. Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — ledger-confirmed 2026-07-03, despite vendor metadata claiming free), group_companies and run_saved_search (unverified stored-content executors). An operator must explicitly set XDATE_DISABLE_PAID=0 to enable them; otherwise use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
     },
   ],
   isError: true,

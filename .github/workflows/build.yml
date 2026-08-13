@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,10 +16,10 @@ jobs:
       matrix:
         node-version: [20.x, 22.x]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -26,30 +29,75 @@ jobs:
         run: npm ci
         working-directory: server
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+        working-directory: server
+
       - name: Type-check and build
         run: npm run build
         working-directory: server
+
+      - name: Verify Docker context policy
+        run: |
+          for required in Dockerfile package.json package-lock.json tsconfig.json src; do
+            test -e "$required"
+          done
+          for excluded in node_modules dist coverage .nyc_output test scripts '.env*' .git .github .vscode .idea; do
+            grep -Fqx "$excluded" .dockerignore
+          done
+          if grep -Eq '^(Dockerfile|package\.json|package-lock\.json|tsconfig\.json|src(/|$))' .dockerignore; then
+            echo 'Required Docker build input is excluded' >&2
+            exit 1
+          fi
+        working-directory: server
+
+      - name: Build hosted Docker image
+        if: matrix.node-version == '22.x'
+        run: docker build --file server/Dockerfile --tag insurancexdate-mcp:ci server
 
       - name: Verify dist artifacts
         run: |
           test -f dist/index.js
           test -f dist/tools.js
           test -f dist/xdate-client.js
+          test -f dist/http.js
+          test -f dist/rate-limit.js
           echo "All dist artifacts produced."
         working-directory: server
 
-      - name: MCP tools/list smoke test (no-network)
+      - name: Unit + HTTP integration tests, then tools/list smoke test (no-network)
         run: npm test
         working-directory: server
 
+      - name: Deploy-program test (Pulumi mocks, no cloud)
+        if: matrix.node-version == '22.x'
+        run: |
+          npm ci
+          npm audit --omit=dev
+          npm test
+        working-directory: deploy/pulumi
+
       - name: Pack .mcpb (smoke test)
         run: |
-          npx -y @anthropic-ai/mcpb pack .
-          ls -la *.mcpb
+          npx -y @anthropic-ai/mcpb@2.1.2 pack .
+          archive="$(find . -maxdepth 1 -name '*.mcpb' -print -quit)"
+          test -n "$archive"
+          unzip -Z1 "$archive" > /tmp/mcpb-entries.txt
+          grep -qx 'manifest.json' /tmp/mcpb-entries.txt
+          grep -qx 'server/dist/index.js' /tmp/mcpb-entries.txt
+          if grep -Eq '^(deploy/|\.github/|\.agent-review/|server/(src|test|scripts)/|server/(Dockerfile|\.dockerignore)$)' /tmp/mcpb-entries.txt; then
+            echo 'Forbidden development/deployment content found in MCPB' >&2
+            exit 1
+          fi
+          if grep -Eiq '(^|/)(\.env($|\.)|[^/]*\.(pem|key)$)' /tmp/mcpb-entries.txt; then
+            echo 'Potential secret-bearing file found in MCPB' >&2
+            exit 1
+          fi
 
       - name: Upload packed .mcpb
         if: matrix.node-version == '22.x'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: insurancexdate-mcpb
           path: '*.mcpb'
+          if-no-files-found: error
