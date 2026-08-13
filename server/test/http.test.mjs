@@ -16,10 +16,26 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { request } from "node:http";
 import { test } from "node:test";
 
 const PATH_TOKEN = "test-path-token-0123456789abcdef";
-const START_TIMEOUT_MS = 8000;
+const START_TIMEOUT_MS = 30_000;
+
+function stopProcess(proc) {
+  if (proc.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const force = setTimeout(() => {
+      proc.kill("SIGKILL");
+      resolve();
+    }, 2_000);
+    proc.once("exit", () => {
+      clearTimeout(force);
+      resolve();
+    });
+    proc.kill();
+  });
+}
 
 /**
  * Spawns dist/http.js with the given env and resolves once it logs its
@@ -30,7 +46,13 @@ const START_TIMEOUT_MS = 8000;
 function startServer(env) {
   return new Promise((resolve, reject) => {
     const proc = spawn("node", ["dist/http.js"], {
-      env: { ...process.env, PORT: "0", ...env },
+      env: {
+        ...process.env,
+        PORT: "0",
+        MCP_ALLOWED_HOSTS: "127.0.0.1",
+        MCP_ALLOWED_ORIGINS: "http://127.0.0.1",
+        ...env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -40,14 +62,15 @@ function startServer(env) {
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      proc.kill();
-      reject(new Error(`server did not start within ${START_TIMEOUT_MS}ms\nstderr: ${stderr}`));
+      void stopProcess(proc).then(() =>
+        reject(new Error(`server did not start within ${START_TIMEOUT_MS}ms\nstdout: ${stdout}\nstderr: ${stderr}`)),
+      );
     }, START_TIMEOUT_MS);
 
     proc.stderr.on("data", (d) => (stderr += d));
     proc.stdout.on("data", (chunk) => {
-      if (settled) return;
       stdout += chunk;
+      if (settled) return;
       for (const line of stdout.split("\n").filter(Boolean)) {
         let msg;
         try {
@@ -60,10 +83,9 @@ function startServer(env) {
           clearTimeout(timeout);
           resolve({
             port: msg.port,
-            close: () => {
-              proc.kill();
-              return new Promise((r) => proc.once("exit", r));
-            },
+            close: () => stopProcess(proc),
+            stdout: () => stdout,
+            stderr: () => stderr,
           });
           return;
         }
@@ -101,6 +123,50 @@ function post(port, path, body, headers = {}) {
     },
     body: JSON.stringify(body),
   });
+}
+
+function rawPost(port, path, body, headers = {}) {
+  return fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...headers,
+    },
+    body,
+  });
+}
+
+function nodePost(port, path, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      hostname: "127.0.0.1",
+      port,
+      path,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...headers,
+      },
+    }, (res) => {
+      let responseBody = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => (responseBody += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: responseBody }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+async function waitFor(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail("condition was not met before timeout");
 }
 
 // --- Crash resistance -------------------------------------------------------
@@ -154,7 +220,222 @@ test("private: wrong token 404s, correct token initializes", async () => {
   }
 });
 
+test("BYOK: Bearer and path credentials are rejected even when identical", async () => {
+  const server = await startServer({ MCP_BYOK: "1" });
+  try {
+    const key = "test-byok-key-123";
+    assert.equal((await post(server.port, `/mcp/${key}`, initializeRequest(), {
+      authorization: `Bearer ${key}`,
+    })).status, 401);
+    assert.equal((await post(server.port, `/mcp/${key}`, initializeRequest(), {
+      authorization: "Bearer different-key-456",
+    })).status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+test("MCP endpoint requires an allowed Host and exact configured Origin", async () => {
+  const server = await startServer({ MCP_BYOK: "1", MCP_ALLOWED_HOSTS: "127.0.0.1,localhost" });
+  const body = JSON.stringify(initializeRequest());
+  const auth = { authorization: "Bearer test-byok-key-123" };
+  try {
+    const badHost = await nodePost(server.port, "/mcp", body, { ...auth, host: "evil.example" });
+    assert.equal(badHost.status, 403);
+    assert.doesNotMatch(badHost.body, /evil\.example/);
+
+    const caseAndPort = await nodePost(server.port, "/mcp", body, {
+      ...auth,
+      host: `LOCALHOST:${server.port}`,
+      origin: "http://127.0.0.1",
+    });
+    assert.equal(caseAndPort.status, 200);
+
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), {
+      ...auth,
+      origin: "https://evil.example",
+    })).status, 403);
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), {
+      ...auth,
+      origin: "http://127.0.0.1/path",
+    })).status, 403);
+  } finally {
+    await server.close();
+  }
+});
+
+test("health check is exempt from MCP Host validation", async () => {
+  const server = await startServer({
+    MCP_BYOK: "1",
+    MCP_ALLOWED_HOSTS: "public.example",
+    MCP_ALLOWED_ORIGINS: "https://public.example",
+  });
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${server.port}/healthz`)).status, 200);
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), {
+      authorization: "Bearer test-byok-key-123",
+    })).status, 403);
+  } finally {
+    await server.close();
+  }
+});
+
+test("MCP endpoint rejects unsupported media headers before reading a body", async () => {
+  const server = await startServer({ MCP_BYOK: "1" });
+  const auth = { authorization: "Bearer test-byok-key-123" };
+  try {
+    assert.equal((await rawPost(server.port, "/mcp", JSON.stringify(initializeRequest()), {
+      ...auth,
+      "content-type": "text/plain",
+    })).status, 415);
+    assert.equal((await rawPost(server.port, "/mcp", JSON.stringify(initializeRequest()), {
+      ...auth,
+      accept: "application/json",
+    })).status, 406);
+    assert.equal((await rawPost(server.port, "/mcp", JSON.stringify(initializeRequest()), {
+      ...auth,
+      accept: "application/jsonish, text/event-stream-extra",
+    })).status, 406);
+  } finally {
+    await server.close();
+  }
+});
+
+test("client JSON-RPC responses receive 202 without echoing payloads to stderr", async () => {
+  const server = await startServer({ MCP_BYOK: "1" });
+  try {
+    const marker = "private-response-payload-0123456789";
+    const response = await post(server.port, "/mcp", { jsonrpc: "2.0", id: marker, result: { query: marker } }, {
+      authorization: "Bearer test-byok-key-123",
+    });
+    assert.equal(response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.doesNotMatch(server.stderr(), new RegExp(marker));
+  } finally {
+    await server.close();
+  }
+});
+
+test("malformed JSON is logged with a stable code and never a body excerpt", async () => {
+  const server = await startServer({ MCP_BYOK: "1" });
+  const canary = "secret-log-canary-123";
+  try {
+    const response = await rawPost(server.port, "/mcp", `{"password":"${canary}",`, {
+      authorization: "Bearer test-byok-key-123",
+    });
+    assert.equal(response.status, 400);
+    await waitFor(() => server.stdout().includes('"error":"invalid_body"'));
+    assert.doesNotMatch(server.stdout(), new RegExp(canary));
+    assert.doesNotMatch(server.stderr(), new RegExp(canary));
+  } finally {
+    await server.close();
+  }
+});
+
+test("caller-controlled method and tool names are not copied into access logs", async () => {
+  const server = await startServer({ MCP_BYOK: "1" });
+  const canary = "untrusted-log-field-123";
+  try {
+    await post(server.port, "/mcp", {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: `${canary}${"x".repeat(20_000)}`, arguments: {} },
+    }, { authorization: "Bearer test-byok-key-123" });
+    await waitFor(() => server.stdout().includes('"attemptedMethods"'));
+    assert.doesNotMatch(server.stdout(), new RegExp(canary));
+    assert.doesNotMatch(server.stderr(), new RegExp(canary));
+  } finally {
+    await server.close();
+  }
+});
+
+test("oversize declared request bodies receive 413 and release admission state", async () => {
+  const server = await startServer({ MCP_BYOK: "1", MCP_MAX_INFLIGHT_REQUESTS: "1" });
+  const auth = { authorization: "Bearer test-byok-key-123" };
+  try {
+    assert.equal((await rawPost(server.port, "/mcp", `"${"x".repeat(1_048_576)}"`, auth)).status, 413);
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), auth)).status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test("slow request bodies time out with 408", async () => {
+  const server = await startServer({ MCP_BYOK: "1", MCP_BODY_TIMEOUT_MS: "100" });
+  try {
+    const response = new Promise((resolve, reject) => {
+      const req = request({
+        hostname: "127.0.0.1",
+        port: server.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-byok-key-123",
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "content-length": "100",
+        },
+      }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      });
+      req.on("error", reject);
+      req.write("{");
+    });
+    assert.equal(await response, 408);
+  } finally {
+    await server.close();
+  }
+});
+
+test("inflight limit releases when a slow client disconnects", async () => {
+  const server = await startServer({
+    MCP_BYOK: "1",
+    MCP_MAX_INFLIGHT_REQUESTS: "1",
+    MCP_BODY_TIMEOUT_MS: "5000",
+  });
+  const headers = { authorization: "Bearer test-byok-key-123" };
+  let slow;
+  try {
+    slow = request({
+      hostname: "127.0.0.1",
+      port: server.port,
+      path: "/mcp",
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "content-length": "100",
+      },
+    });
+    slow.on("error", () => {});
+    slow.write("{");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), headers)).status, 503);
+    slow.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), headers)).status, 200);
+  } finally {
+    slow?.destroy();
+    await server.close();
+  }
+});
+
 // --- Rate limiting ----------------------------------------------------------
+
+test("authenticated malformed bodies consume the pre-parse ingress budget", async () => {
+  const server = await startServer({ MCP_BYOK: "1", MCP_INGRESS_RATE_LIMIT_PER_MIN: "2" });
+  const headers = { authorization: "Bearer test-byok-key-123" };
+  try {
+    assert.equal((await rawPost(server.port, "/mcp", "{", headers)).status, 400);
+    assert.equal((await rawPost(server.port, "/mcp", "{", headers)).status, 400);
+    assert.equal((await post(server.port, "/mcp", initializeRequest(), headers)).status, 429);
+  } finally {
+    await server.close();
+  }
+});
 
 test("BYOK: per-key limit denies with 429 once spent", async () => {
   const server = await startServer({ MCP_BYOK: "1", MCP_RATE_LIMIT_PER_MIN: "2" });

@@ -28,7 +28,7 @@ import {
 /**
  * Type-erase the schema and handler at the registerTool call site.
  *
- * Why: SDK 1.29's `registerTool<OutputArgs, InputArgs>` infers InputArgs
+ * Why: the SDK's `registerTool<OutputArgs, InputArgs>` infers InputArgs
  * from the literal shape of `inputSchema`. With 16-field schemas (search),
  * TS's ShapeOutput<InputArgs> mapped type triggers TS2589 (instantiation
  * excessively deep). Erasing to `any` at the call site bypasses the
@@ -69,7 +69,7 @@ export function readApiKeyOrExit(): string {
 
 /**
  * opts.paidTools: register the six gated tools ($0.05-$0.25/call upstream).
- * Defaults to the XDATE_DISABLE_PAID env setting. When false the tools are
+ * Defaults to the XDATE_DISABLE_PAID env setting, which fails closed. When false the tools are
  * not registered at all — absent from tools/list — so a model never
  * considers them, instead of seeing them and being refused at call time.
  * Can only narrow: the env kill switch still gates the handlers themselves.
@@ -80,10 +80,11 @@ export function createServer(client: XdateClient, opts?: { paidTools?: boolean }
 
   const server = new McpServer({
     name: "insurancexdate",
-    version: "1.3.5",
+    version: "1.4.0",
   });
-  // Surface MCP protocol-level errors on stderr instead of swallowing them.
-  server.server.onerror = (err) => console.error("insurancexdate MCP error:", err);
+  // Surface a stable diagnostic without serializing SDK errors: some include
+  // the full caller-controlled JSON-RPC message (including query data).
+  server.server.onerror = () => console.error('{"evt":"mcp_error","error":"protocol_error"}');
 
   server.registerTool(
     "search",

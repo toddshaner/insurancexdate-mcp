@@ -2,8 +2,7 @@
  * Deploys the remote streamable-HTTP entrypoint (server/src/http.ts) to AWS
  * App Runner: builds server/Dockerfile into ECR, stores the two secrets in
  * SSM, fronts the service with a custom domain in Cloudflare DNS, and
- * exposes an HTTPS URL suitable for a claude.ai organization custom
- * connector.
+ * exposes an HTTPS URL suitable for a compatible remote MCP client.
  *
  * Configuration is entirely environment-driven — copy .env.example to .env
  * and deploy with ./up.sh, which sources .env into the process environment
@@ -71,23 +70,25 @@ const zoneName = process.env.MCP_ZONE_NAME?.trim() || domain.split(".").slice(-2
 // don't churn. SSM parameter paths derive from it for the same reason.
 const serviceName = process.env.MCP_SERVICE_NAME?.trim() || "insurancexdate-mcp";
 
-// Paid tools ($0.05-$0.25/call): the mode decides the default, matching how
-// metered-API MCP servers normally work. Private mode disables them unless
-// opted in — every call spends the HOST's key. BYOK enables them — callers
-// spend their own accounts, tools are price-labeled, and the client's
-// per-tool permission prompt is the spend gate. XDATE_DISABLE_PAID set
-// explicitly overrides either way (truthy disables, falsy enables).
-const PAID_OPT_IN_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
-const rawDisablePaid = (process.env.XDATE_DISABLE_PAID ?? "").trim().toLowerCase();
-const disablePaid = rawDisablePaid === "" ? !byokMode : !PAID_OPT_IN_VALUES.has(rawDisablePaid);
+// Paid tools ($0.05-$0.25/call) default off in both HTTP modes. Client-side
+// prompts vary and cannot be the operator's spend control. The operator must
+// explicitly set XDATE_DISABLE_PAID to a recognized false value to expose
+// paid tools; a request's ?paid=1 remains caller intent and cannot override
+// this deployment-level disable.
+const PAID_ENABLE_VALUES = new Set(["0", "false", "no", "off"]);
+export function paidToolsDisabled(rawValue: string | undefined): boolean {
+  const normalized = (rawValue ?? "").trim().toLowerCase();
+  return normalized === "" || !PAID_ENABLE_VALUES.has(normalized);
+}
+const disablePaid = paidToolsDisabled(process.env.XDATE_DISABLE_PAID);
 
 // Cost guardrails. App Runner's DEFAULT auto-scaling config runs up to 25
 // instances, so a sustained request flood (the endpoint is directly
 // reachable — the Cloudflare record is deliberately unproxied) scales the
-// bill ~25x. One small instance serves this workload fine and caps the
-// worst-case flood cost at roughly $15/month; raise MCP_MAX_INSTANCES only
-// with intent. Note the server's rate limiter is per-process, so instance
-// count also multiplies the effective rate limits.
+// bill ~25x. One small instance serves this workload and bounds concurrent
+// instance count, but it does not cap monthly spend. Raise MCP_MAX_INSTANCES
+// only with intent. Note the server's rate limiter is per-process, so
+// instance count also multiplies the effective rate limits.
 const rawMaxInstances = process.env.MCP_MAX_INSTANCES?.trim() || "1";
 const maxInstances = Number(rawMaxInstances);
 if (!Number.isInteger(maxInstances) || maxInstances < 1) {
@@ -105,6 +106,8 @@ if (billingAlertEmail && !(Number(rawBudgetUsd) > 0)) {
 
 const repo = new awsx.ecr.Repository("insurancexdate-mcp", {
   forceDelete: true,
+  imageScanningConfiguration: { scanOnPush: true },
+  imageTagMutability: "IMMUTABLE",
 });
 
 const image = new awsx.ecr.Image("insurancexdate-mcp", {
@@ -151,8 +154,9 @@ const instanceRole = secretParams
     })
   : null;
 
-if (secretParams && instanceRole) {
-  new aws.iam.RolePolicy("instance-ssm-read", {
+const instanceSsmPolicy =
+  secretParams && instanceRole
+    ? new aws.iam.RolePolicy("instance-ssm-read", {
     role: instanceRole.id,
     policy: pulumi
       .all([secretParams.apiKey.arn, secretParams.pathToken.arn])
@@ -168,7 +172,13 @@ if (secretParams && instanceRole) {
           ],
         }),
       ),
-  });
+      })
+    : null;
+
+export function appRunnerServiceOptions(
+  policy: pulumi.Resource | null,
+): pulumi.CustomResourceOptions {
+  return { dependsOn: policy ? [policy] : [] };
 }
 
 const scalingConfig = new aws.apprunner.AutoScalingConfigurationVersion("scaling", {
@@ -177,10 +187,12 @@ const scalingConfig = new aws.apprunner.AutoScalingConfigurationVersion("scaling
   maxSize: maxInstances,
 });
 
-const service = new aws.apprunner.Service("insurancexdate-mcp", {
-  serviceName,
-  autoScalingConfigurationArn: scalingConfig.arn,
-  sourceConfiguration: {
+const service = new aws.apprunner.Service(
+  "insurancexdate-mcp",
+  {
+    serviceName,
+    autoScalingConfigurationArn: scalingConfig.arn,
+    sourceConfiguration: {
     autoDeploymentsEnabled: false,
     authenticationConfiguration: { accessRoleArn: accessRole.arn },
     imageRepository: {
@@ -188,16 +200,27 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
       imageRepositoryType: "ECR",
       imageConfiguration: {
         port: "8080",
-        // Omit XDATE_DISABLE_PAID entirely when paid tools are wanted:
-        // tools.ts warns on any set-but-unrecognized value.
+        // Emit an explicit value in both states because the server defaults
+        // paid tools off unless it receives a recognized false value.
         runtimeEnvironmentVariables: {
-          ...(disablePaid ? { XDATE_DISABLE_PAID: "1" } : {}),
+          MCP_ALLOWED_HOSTS: domain.toLowerCase(),
+          MCP_ALLOWED_ORIGINS: `https://${domain.toLowerCase()}`,
+          XDATE_DISABLE_PAID: disablePaid ? "1" : "0",
           ...(byokMode ? { MCP_BYOK: "1" } : {}),
           ...(process.env.MCP_RATE_LIMIT_PER_MIN?.trim()
             ? { MCP_RATE_LIMIT_PER_MIN: process.env.MCP_RATE_LIMIT_PER_MIN.trim() }
             : {}),
           ...(process.env.MCP_GLOBAL_RATE_LIMIT_PER_MIN?.trim()
             ? { MCP_GLOBAL_RATE_LIMIT_PER_MIN: process.env.MCP_GLOBAL_RATE_LIMIT_PER_MIN.trim() }
+            : {}),
+          ...(process.env.MCP_INGRESS_RATE_LIMIT_PER_MIN?.trim()
+            ? { MCP_INGRESS_RATE_LIMIT_PER_MIN: process.env.MCP_INGRESS_RATE_LIMIT_PER_MIN.trim() }
+            : {}),
+          ...(process.env.MCP_BODY_TIMEOUT_MS?.trim()
+            ? { MCP_BODY_TIMEOUT_MS: process.env.MCP_BODY_TIMEOUT_MS.trim() }
+            : {}),
+          ...(process.env.MCP_MAX_INFLIGHT_REQUESTS?.trim()
+            ? { MCP_MAX_INFLIGHT_REQUESTS: process.env.MCP_MAX_INFLIGHT_REQUESTS.trim() }
             : {}),
           // App Runner resolves runtimeEnvironmentSecrets when it deploys a
           // revision, not on each read: rotating the SSM value alone leaves
@@ -219,17 +242,19 @@ const service = new aws.apprunner.Service("insurancexdate-mcp", {
           : {},
       },
     },
+    },
+    instanceConfiguration: {
+      cpu: "256",
+      memory: "512",
+      ...(instanceRole ? { instanceRoleArn: instanceRole.arn } : {}),
+    },
+    healthCheckConfiguration: {
+      protocol: "HTTP",
+      path: "/healthz",
+    },
   },
-  instanceConfiguration: {
-    cpu: "256",
-    memory: "512",
-    ...(instanceRole ? { instanceRoleArn: instanceRole.arn } : {}),
-  },
-  healthCheckConfiguration: {
-    protocol: "HTTP",
-    path: "/healthz",
-  },
-});
+  appRunnerServiceOptions(instanceSsmPolicy),
+);
 
 // The Cloudflare provider authenticates via the CLOUDFLARE_API_TOKEN env var
 // (a token scoped to Zone:Read + DNS:Edit on this zone).
@@ -278,10 +303,10 @@ new cloudflare.DnsRecord("mcp-cname", {
   proxied: false,
 });
 
-// Bill-shock alarm: email at 80% actual and 100% forecasted of the monthly
-// budget. Account-wide by design — a flood that scales some OTHER resource
-// should still page. Requires no console setup; Budgets is free for the
-// first two budgets per account.
+// Bill-shock alerts: email at 80% actual and 100% forecasted of the monthly
+// budget. This is notification only; AWS Budgets does not stop resources or
+// cap spend. Account-wide by design. Requires no console setup; Budgets is
+// free for the first two budgets per account.
 if (billingAlertEmail) {
   new aws.budgets.Budget("monthly-cost", {
     budgetType: "COST",
@@ -308,10 +333,10 @@ if (billingAlertEmail) {
 }
 
 export const serviceUrl = pulumi.interpolate`https://${service.serviceUrl}`;
-// Private mode: contains the path token — a capability URL. Paste into
-// claude.ai Organization settings -> Connectors and treat it like a
-// credential. BYOK mode: a template — each caller substitutes their own
-// InsuranceXDate API key (or sends it as a Bearer header to /mcp instead).
+// Private mode: contains the path token — a capability URL intended for one
+// operator or a tightly controlled test. It is not per-user authentication.
+// BYOK mode: a template for individual user configuration; each caller uses
+// their own vendor-authorized key (or Bearer header to /mcp).
 export const connectorUrl = pathToken
   ? pulumi.secret(pulumi.interpolate`https://${domain}/mcp/${pathToken}`)
   : pulumi.output(`https://${domain}/mcp/<your-insurancexdate-api-key>`);

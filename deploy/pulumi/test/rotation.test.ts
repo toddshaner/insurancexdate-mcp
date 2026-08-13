@@ -27,6 +27,9 @@ process.env.MCP_PATH_TOKEN = "0123456789abcdef0123";
 delete process.env.MCP_BYOK;
 delete process.env.MCP_RATE_LIMIT_PER_MIN;
 delete process.env.MCP_GLOBAL_RATE_LIMIT_PER_MIN;
+delete process.env.MCP_INGRESS_RATE_LIMIT_PER_MIN;
+delete process.env.MCP_BODY_TIMEOUT_MS;
+delete process.env.MCP_MAX_INFLIGHT_REQUESTS;
 delete process.env.XDATE_DISABLE_PAID;
 delete process.env.MCP_SERVICE_NAME;
 delete process.env.MCP_ZONE_NAME;
@@ -135,9 +138,34 @@ test("rotating an SSM secret produces an App Runner service diff", async () => {
   // The secrets themselves still reach the container via the parameter ARNs.
   assert.match(imageConfig.runtimeEnvironmentSecrets.INSURANCEXDATE_API_KEY, /^arn:aws:ssm:/);
   assert.match(imageConfig.runtimeEnvironmentSecrets.MCP_PATH_TOKEN, /^arn:aws:ssm:/);
+  assert.equal(
+    imageConfig.runtimeEnvironmentVariables.XDATE_DISABLE_PAID,
+    "1",
+    "HTTP deployments must default paid tools off",
+  );
+  assert.equal(imageConfig.runtimeEnvironmentVariables.MCP_ALLOWED_HOSTS, "mcp.example.com");
+  assert.equal(imageConfig.runtimeEnvironmentVariables.MCP_ALLOWED_ORIGINS, "https://mcp.example.com");
 });
 
-test("auto-scaling is pinned to one instance by default (flood-cost cap)", async () => {
+test("App Runner waits for the SSM read policy attachment", async () => {
+  const infra = await import("../index");
+  const markerPolicy = {} as pulumi.Resource;
+  assert.deepEqual(infra.appRunnerServiceOptions(markerPolicy).dependsOn, [markerPolicy]);
+  assert.deepEqual(infra.appRunnerServiceOptions(null).dependsOn, []);
+});
+
+test("paid tools require explicit operator opt-in in both HTTP modes", async () => {
+  const infra = await import("../index");
+  for (const mode of ["private", "BYOK"]) {
+    assert.equal(infra.paidToolsDisabled(undefined), true, `${mode} mode must default paid tools off`);
+    assert.equal(infra.paidToolsDisabled(""), true, `${mode} mode must treat blank as disabled`);
+  }
+  assert.equal(infra.paidToolsDisabled("0"), false, "0 is the explicit operator opt-in");
+  assert.equal(infra.paidToolsDisabled("false"), false, "false is the explicit operator opt-in");
+  assert.equal(infra.paidToolsDisabled("1"), true);
+});
+
+test("auto-scaling is pinned to one instance by default (concurrency bound)", async () => {
   const infra = await import("../index");
   await promiseOf(infra.serviceUrl);
   assert.ok(scalingInputs, "auto-scaling configuration was never registered");

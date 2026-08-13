@@ -44,6 +44,14 @@ const REST_PAGELIMIT_CAP = 50;
 
 /** Per-fetch timeout. XDate can be slow; this prevents hangs from looking like client disconnects. */
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Bound upstream memory use even when a peer omits or lies about Content-Length. */
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+class UpstreamError extends Error {
+  constructor(readonly kind: "http" | "invalid" | "too_large") {
+    super(kind);
+  }
+}
 
 /** MCP-style -> REST-style param name translation for /Search. */
 const SEARCH_PARAM_TRANSLATIONS: Record<string, string> = {
@@ -108,7 +116,7 @@ function isCallToolResult(x: unknown): x is CallToolResult {
 }
 
 export class XdateClient {
-  constructor(private apiKey: string) {
+  constructor(private apiKey: string, private requestSignal?: AbortSignal) {
     if (!apiKey) {
       throw new Error("INSURANCEXDATE_API_KEY is required");
     }
@@ -198,22 +206,13 @@ export class XdateClient {
       if ("result" in response) {
         const result = (response as { result: unknown }).result;
         if (isCallToolResult(result)) return result;
-        return asMcpText(
-          `Upstream MCP returned malformed result for ${toolName}: ${JSON.stringify(result).slice(0, 500)}`,
-          true,
-        );
+        return asMcpText(`Upstream MCP returned an invalid result for ${toolName}.`, true);
       }
       if ("error" in response) {
-        return asMcpText(
-          `Upstream MCP error on ${toolName}: ${JSON.stringify((response as { error: unknown }).error).slice(0, 500)}`,
-          true,
-        );
+        return asMcpText(`Upstream MCP rejected ${toolName}.`, true);
       }
     }
-    return asMcpText(
-      `Unexpected upstream response shape for ${toolName}: ${JSON.stringify(response).slice(0, 500)}`,
-      true,
-    );
+    return asMcpText(`Upstream MCP returned an invalid response for ${toolName}.`, true);
   }
 
   private async postJson(url: string, body: unknown): Promise<unknown> {
@@ -222,32 +221,64 @@ export class XdateClient {
       "Accept": "application/json",
       "X-API-Key": this.apiKey,
     };
+    const signals = [AbortSignal.timeout(REQUEST_TIMEOUT_MS)];
+    if (this.requestSignal) signals.push(this.requestSignal);
     const response = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      redirect: "error",
       // 30s timeout: avoids the "looks like the client disconnected" symptom when
       // XDate is slow. Aborts the underlying socket cleanly.
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.any(signals),
     });
-    const text = await response.text();
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+      await response.body?.cancel();
+      throw new UpstreamError("too_large");
+    }
     if (!response.ok) {
-      // HTTP error (401, 403, 429, 5xx). Body may still be JSON, but we treat
-      // any non-2xx as a failure so the handler returns isError instead of
-      // wrapping an error body as a successful result.
-      throw new Error(`HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+      // Error bodies are not useful to callers and may contain sensitive or
+      // arbitrarily large vendor diagnostics. Do not buffer them at all.
+      await response.body?.cancel();
+      throw new UpstreamError("http");
+    }
+    if (!response.body) throw new UpstreamError("invalid");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let received = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > MAX_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw new UpstreamError("too_large");
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally {
+      reader.releaseLock();
     }
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`Non-JSON response (HTTP ${response.status}): ${text.slice(0, 500)}`);
+      throw new UpstreamError("invalid");
     }
   }
 }
 
 function errorMessage(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  // undici buries the useful part (ENOTFOUND, ECONNREFUSED...) in err.cause;
-  // without it every network failure surfaces as a bare "fetch failed".
-  return err.cause ? `${err.message} (${String(err.cause)})` : err.message;
+  if (err instanceof UpstreamError) {
+    if (err.kind === "too_large") return "upstream response exceeded the safety limit";
+    if (err.kind === "http") return "upstream service rejected the request";
+    return "upstream service returned an invalid response";
+  }
+  if (err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError")) {
+    return "request cancelled or timed out";
+  }
+  return "upstream service unavailable";
 }

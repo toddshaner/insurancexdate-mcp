@@ -10,8 +10,8 @@
 #   ./up.sh -e .env.byok up                     -> second endpoint/stack
 #
 # Multiple endpoints (e.g. a private instance and a BYOK instance) live in
-# separate env files AND separate stacks with distinct MCP_SERVICE_NAME
-# values - select the stack once with `./up.sh -e <file> stack select <name>`.
+# separate env files AND separate MCP_STACK values with distinct
+# MCP_SERVICE_NAME values.
 set -eu
 cd "$(dirname "$0")"
 ENV_FILE=.env
@@ -26,11 +26,13 @@ fi
 set -a
 . "./$ENV_FILE"
 set +a
-# Pin the env file to its stack (MCP_STACK) so values from one file can
-# never deploy into another file's stack via a stale `stack select`.
-if [ -n "${MCP_STACK:-}" ]; then
-  pulumi stack select "$MCP_STACK" 2>/dev/null || pulumi stack init "$MCP_STACK"
+# Pin the env file to its required stack so values from one file cannot land
+# in another file's stack through a stale prior selection.
+if [ -z "${MCP_STACK:-}" ]; then
+  echo "MCP_STACK is required in $ENV_FILE (for example: MCP_STACK=prod)." >&2
+  exit 1
 fi
+pulumi stack select "$MCP_STACK" 2>/dev/null || pulumi stack init "$MCP_STACK"
 if [ $# -eq 0 ]; then
   set -- up
 fi

@@ -1,118 +1,122 @@
 # Hosted deployment (AWS App Runner via Pulumi)
 
-Deploys the remote streamable-HTTP entrypoint (`server/src/http.ts`) as one
-shared HTTPS endpoint, usable as a [claude.ai organization custom
-connector](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)
-so a whole Team/Enterprise org gets the tools with no per-machine installs.
+Deploys the remote streamable-HTTP entrypoint (`server/src/http.ts`) behind a
+custom domain (`MCP_DOMAIN`, for example `mcp.example.com`). DNS must be in
+Cloudflare. The program creates the App Runner domain association, certificate
+validation records, and subdomain CNAME. Certificate issuance is asynchronous.
 
-The endpoint is served under a custom domain (`MCP_DOMAIN`, e.g.
-`mcp.example.com`) so the connector URL survives service re-creation. DNS is
-assumed to live in Cloudflare; the program creates the App Runner domain
-association, the certificate-validation CNAMEs, and the subdomain CNAME
-itself. Certificate issuance is asynchronous — allow a few minutes after the
-first deploy before the domain serves traffic.
+> **AWS availability:** AWS says App Runner is no longer open to new customers.
+> This example is usable only in AWS accounts with existing App Runner access.
+> New customers should choose another container host, such as
+> [ECS Express Mode](https://docs.aws.amazon.com/apprunner/latest/dg/apprunner-availability-change.html).
+> This repository does not currently provide that alternative stack.
 
-Configuration is entirely `.env`-driven. Always deploy through `./up.sh` —
-it sources `.env` into the CLI environment so the AWS and Cloudflare
-provider plugins (separate processes) see the same values as the program.
+Configuration is `.env`-driven. Always use `./up.sh`; it exports the file's
+values so the program and provider plugins receive the same configuration, and
+it selects the required `MCP_STACK` before any Pulumi command runs.
 
-## One-time setup
+## One-time setup and deploy
 
 ```bash
 cd deploy/pulumi
-npm install
+npm ci
 cp .env.example .env        # fill in every non-commented value
-pulumi stack init prod      # state only; all configuration comes from .env
+./up.sh                     # creates/selects MCP_STACK, then runs pulumi up
 ```
 
-Requirements: Pulumi CLI, Docker (builds the image locally), AWS
-credentials (`AWS_PROFILE` in `.env` or ambient), and a Cloudflare API
-token with Zone:Read + DNS:Edit on the zone.
+Requirements: Pulumi CLI, Docker, credentials for an AWS account with existing
+App Runner access, and a Cloudflare token scoped to Zone:Read + DNS:Edit.
 
-## Deploy
-
-```bash
-./up.sh                     # pulumi up, with .env loaded
-```
-
-Then read the connector URL and paste it into claude.ai → Organization
-settings → Connectors:
+Read the resulting URL with:
 
 ```bash
 ./up.sh stack output connectorUrl --show-secrets
 ```
 
+Do not paste a shared user's InsuranceXDate key into an organization-wide
+connector. InsuranceXDate's [MCP guide](https://insurancexdate.helpjuice.com/en_US/integrations/mcp)
+describes user-specific credentials, and its
+[Terms of Service](https://www.insurancexdate.com/terms-of-service/) restrict
+credential sharing. Each user should configure their own authorized key through
+a client surface that keeps it user-scoped, use an InsuranceXDate-native/OAuth
+flow when available, or obtain explicit vendor approval for a delegated model.
+If an MCP client only supports one organization-wide URL, this BYOK deployment
+does not turn that URL into per-user identity or credential exchange.
+
 ## Security model
 
-Two mutually exclusive auth modes, chosen in `.env` (see `.env.example` and
-the root README's Option E for details):
+Both modes enforce exact Host and Origin allowlists from `MCP_DOMAIN`:
+`MCP_ALLOWED_HOSTS=<domain>` and
+`MCP_ALLOWED_ORIGINS=https://<domain>`. A present Origin must match exactly;
+requests without Origin are accepted only after Host validation succeeds.
+`/healthz` is exempt so App Runner can probe its generated service hostname.
+A host entry without a port accepts that exact host with any numeric port;
+specify `host:port` when a port must be fixed.
 
-**Private instance** (default): there is no OAuth layer; the URL's path
-token is the only gate (a "capability URL"). Treat the full URL as a
-credential: share it only through the org connector config, and rotate it by
-changing `MCP_PATH_TOKEN` in `.env` + `./up.sh` if it leaks. Every request
-an attacker could make with the URL spends your InsuranceXDate balance.
+**Private mode** stores one operator's vendor key and protects the endpoint with
+a secret path token. The token is a bearer capability, not user authentication:
+it has no per-user identity, revocation, quota, or attribution. Use this mode for
+one operator or a tightly controlled test. Multi-user use requires an external
+identity gateway and a vendor-approved credential/delegation model. Rotate a
+leaked token by changing `MCP_PATH_TOKEN` and running `./up.sh`; the stack wires
+SSM parameter versions into the service so a completed deployment resolves the
+new value.
 
-Rotation takes effect on the `./up.sh` run itself: the service config embeds
-the SSM parameter versions (`MCP_SECRETS_VERSION`), so a changed secret is a
-service diff and App Runner rolls a new revision that resolves the new
-values. Until that deployment finishes, the old token still answers.
+**BYOK mode** (`MCP_BYOK=1`) creates no SSM key parameters. Each individual
+caller must supply their own vendor-authorized key through a user-scoped client
+configuration. Putting one person's key into a shared connector URL defeats
+BYOK and bills that person's account.
 
-**BYOK** (`MCP_BYOK=1`): the deployment stores no key anywhere (no SSM
-parameters are created); each caller authenticates with their own
-InsuranceXDate key per request and spends their own balance. The
-`connectorUrl` output becomes a template for callers to fill in.
+Paid tools default disabled in both modes. An operator must explicitly set
+`XDATE_DISABLE_PAID=0` (or another documented false value) to expose them.
+Then `?paid=1` expresses caller intent for that connection; it cannot override
+an operator-level disable. Whether a client asks before each tool call is
+client-dependent and must not be treated as a spend control. Use a narrow tool
+allowlist and independently monitored vendor/AWS budgets appropriate to the
+deployment.
 
-Paid tools ($0.05–$0.25/call) are two-layered. Per caller, connections are
-**free-only unless the URL carries `?paid=1`** (the gated tools are then
-listed, price-labeled, and the caller's key pays; MCP clients prompt before
-each call). At the instance level, `XDATE_DISABLE_PAID` in `.env` decides
-whether `?paid=1` can work at all: it defaults by mode — allowed in BYOK
-(callers spend their own accounts), disallowed in private mode (every call
-spends the host's key). Truthy disables, falsy enables, explicit setting
-wins.
+The server also applies an authenticated pre-body ingress limiter, body-read timeout, and
+in-flight request cap. Defaults are documented in `.env.example`; operators can
+set `MCP_INGRESS_RATE_LIMIT_PER_MIN`, `MCP_BODY_TIMEOUT_MS`, and
+`MCP_MAX_INFLIGHT_REQUESTS` to positive integers when the host needs tighter
+bounds.
 
-## Running a second endpoint (e.g. private + BYOK)
+For local Docker testing, set allowlists explicitly for the address clients use:
 
-Each endpoint is its own stack with its own env file. The env file must set
-a distinct `MCP_SERVICE_NAME` (App Runner service names are unique per AWS
-account) and its own `MCP_DOMAIN`; the domain's zone may live in a different
-Cloudflare account, in which case that account's `CLOUDFLARE_API_TOKEN` goes
-in that env file.
+```bash
+docker run --rm -p 8080:8080 \
+  -e MCP_ALLOWED_HOSTS=localhost:8080,127.0.0.1:8080 \
+  -e MCP_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
+  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 insurancexdate-mcp
+```
+
+## Running a second endpoint
+
+Use a separate env file, stack, service name, and domain for each endpoint:
 
 ```bash
 cp .env.example .env.byok   # MCP_STACK=byok, MCP_BYOK=1,
                             # MCP_SERVICE_NAME=insurancexdate-mcp-byok, ...
-./up.sh -e .env.byok        # auto-creates + selects the stack, then deploys
+./up.sh -e .env.byok
 ```
 
-Set `MCP_STACK` in every env file (including `.env`) — `up.sh` selects that
-stack before running, so one file's values can never deploy into another
-file's stack via a stale `pulumi stack select`.
+`MCP_STACK` is mandatory. The wrapper refuses to run without it so values cannot
+silently land in a previously selected stack.
 
-## Cost guardrails
+## Cost controls
 
-The endpoint is directly reachable (the Cloudflare record is deliberately
-unproxied — proxying would let Cloudflare read callers' keys in URLs and
-headers), so assume anyone can flood it. Two caps bound what that can cost:
-
-- **Auto-scaling is pinned to one instance** (`MCP_MAX_INSTANCES`, default
-  1). App Runner's default config scales to 25 instances under load; pinned
-  to one small instance, a sustained flood costs roughly $15/month at worst
-  instead of ~25x that. One instance easily serves an org's MCP traffic,
-  and the server's per-process rate limits stay exact instead of
-  multiplying per instance.
-- **Optional billing alert**: set `MCP_BILLING_ALERT_EMAIL` (and optionally
-  `MCP_MONTHLY_BUDGET_USD`, default 50) to create an account-wide AWS
-  monthly cost budget that emails at 80% actual / 100% forecasted spend.
-
-Upstream InsuranceXDate spend is protected separately: private mode is
-dark without the path token, BYOK spends only callers' own keys, and both
-modes are rate-limited (see the root README's Option E).
+`MCP_MAX_INSTANCES` defaults to 1. This bounds concurrent App Runner instances
+and limits multiplication of per-process rate limits; it is not a monthly cost
+cap. `MCP_BILLING_ALERT_EMAIL` optionally creates account-wide AWS Budget alerts
+at 80% actual and 100% forecasted spend. AWS Budget alerts notify only: they do
+not stop resources or charges. Monitor InsuranceXDate usage separately because
+AWS controls cannot cap upstream API charges.
 
 ## Traffic visibility
 
-The container writes one JSON line per request (`evt: "request"` with the
-JSON-RPC methods, tool names, status, and duration) to stdout, which App
-Runner forwards to CloudWatch Logs (`/aws/apprunner/insurancexdate-mcp/...`,
-application log stream). Filter on `{ $.evt = "request" }` to see usage.
+The HTTP server emits structured operational records for accepted authenticated
+POST requests and selected rejection/error paths. These are useful diagnostics,
+not a complete access or security audit log: health checks, some early
+rejections, and caller identity are not fully represented. App Runner forwards
+container stdout to CloudWatch Logs. Do not rely on these records for per-user
+attribution, especially in private shared-token mode.

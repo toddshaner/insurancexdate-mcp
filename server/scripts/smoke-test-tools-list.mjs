@@ -5,7 +5,7 @@
  * Spawns the built server twice (stdio) and asserts both registration
  * contracts:
  *
- * Full mode (paid tools in play):
+ * Explicit paid mode (XDATE_DISABLE_PAID=0):
  *   1. tools/list includes exactly the expected tool names (EXPECTED);
  *   2. the `search`, `benefits_search`, and `serff_search` input schemas each
  *      expose exactly the expected param set (catches the silent-param-drop
@@ -19,7 +19,7 @@
  *   6. serverInfo.version === server/package.json === manifest.json (the
  *      triple-version drift that went stale once before, per CHANGELOG v1.1.6).
  *
- * Free mode (XDATE_DISABLE_PAID=1):
+ * Default/free mode (XDATE_DISABLE_PAID blank or unrecognized):
  *   7. tools/list contains exactly the free tools — the gated tools are NOT
  *      registered at all (absent from the list, not present-but-refusing),
  *      so a model in free mode never considers them.
@@ -256,7 +256,7 @@ function listTools(extraEnv) {
 }
 
 // --- Full mode: every tool registered, schemas exact, versions in sync. ---
-const full = await listTools({});
+const full = await listTools({ XDATE_DISABLE_PAID: "0" });
 if (full.serverVersion !== pkgVersion || full.serverVersion !== manifestVersion) {
   fail(
     `FAIL: version drift — serverInfo ${full.serverVersion}, package.json ${pkgVersion}, manifest.json ${manifestVersion}`,
@@ -308,7 +308,7 @@ if (JSON.stringify(filterEnum) !== JSON.stringify(EXPECTED_FILTER_ENUM)) {
 }
 
 // --- Free mode: gated tools absent from tools/list, not just refusing. ---
-const free = await listTools({ XDATE_DISABLE_PAID: "1" });
+const free = await listTools({ XDATE_DISABLE_PAID: "" });
 const freeNames = free.tools.map((t) => t.name).sort();
 console.log("Tools registered (free mode):", freeNames.join(", "));
 if (JSON.stringify(freeNames) !== JSON.stringify([...EXPECTED_FREE].sort())) {
@@ -317,7 +317,13 @@ if (JSON.stringify(freeNames) !== JSON.stringify([...EXPECTED_FREE].sort())) {
   );
 }
 
+const failClosed = await listTools({ XDATE_DISABLE_PAID: "unrecognized-value" });
+const failClosedNames = failClosed.tools.map((t) => t.name).sort();
+if (JSON.stringify(failClosedNames) !== JSON.stringify([...EXPECTED_FREE].sort())) {
+  fail("FAIL: an unrecognized paid-tool setting must fail closed");
+}
+
 console.log(
-  `PASS: full mode registers all ${EXPECTED.length} tools (manifest in sync), free mode registers exactly ${EXPECTED_FREE.length} free tools, search/benefits_search/serff_search schemas and filter enum exact, version ${pkgVersion} consistent.`,
+  `PASS: explicit paid mode registers all ${EXPECTED.length} tools (manifest in sync), default and invalid settings register exactly ${EXPECTED_FREE.length} free tools, search/benefits_search/serff_search schemas and filter enum exact, version ${pkgVersion} consistent.`,
 );
 process.exit(0);
