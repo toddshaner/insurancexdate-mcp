@@ -75,6 +75,14 @@ client-dependent and must not be treated as a spend control. Use a narrow tool
 allowlist and independently monitored vendor/AWS budgets appropriate to the
 deployment.
 
+Persistent account actions are independently disabled. Set
+`XDATE_ENABLE_WRITES=1` only for a trusted single-user deployment, append
+`?writes=1` to the connector URL (combine with `?paid=1&writes=1` when needed),
+and pass `confirm=true` on every `add_note` or `set_flag` call. These controls
+express operator and caller intent, but they do not provide per-user identity or
+prove a human approved the exact mutation. The server never automatically
+retries write actions after an ambiguous timeout.
+
 The server also applies an authenticated pre-body ingress limiter, body-read timeout, and
 in-flight request cap. Defaults are documented in `.env.example`; operators can
 set `MCP_INGRESS_RATE_LIMIT_PER_MIN`, `MCP_BODY_TIMEOUT_MS`, and
@@ -87,7 +95,8 @@ For local Docker testing, set allowlists explicitly for the address clients use:
 docker run --rm -p 8080:8080 \
   -e MCP_ALLOWED_HOSTS=localhost:8080,127.0.0.1:8080 \
   -e MCP_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
-  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 insurancexdate-mcp
+  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 \
+  -e XDATE_ENABLE_WRITES=0 insurancexdate-mcp
 ```
 
 ## Running a second endpoint

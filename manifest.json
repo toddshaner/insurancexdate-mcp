@@ -3,9 +3,9 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/manifest.schema.json",
   "name": "insurancexdate",
   "display_name": "InsuranceXDate",
-  "version": "1.4.0",
-  "description": "TypeScript MCP server for the InsuranceXDate workers'-comp prospect database, Form 5500 benefits search, SERFF rate-filing API, and account workflow tools. 13 tools: search, benefits_search, match, filter, company_details, talkpoints, serff_search, serff_filing, flagged_companies, groups, group_companies, saved_searches, run_saved_search.",
-  "long_description": "Wraps the InsuranceXDate REST API and MCP endpoints. Works with any MCP client (Claude Desktop, Cursor, Continue, Zed, Cline, custom). Implements parameter translation between upstream MCP and REST schemas, URL decoding for company UIDs returned by REST search and consumed by MCP detail lookups, bounded upstream requests and responses, stable error handling, structuredContent on search and match results for typed LLM reasoning, schema validation via zod (state codes, dates, premium / mod / employee bands, addloptions and policyoptions enums, datamode lock on benefits search), and default-deny paid-tool gating. Uses the locked @modelcontextprotocol/sdk dependency and Node 20+. This .mcpb bundle targets Claude Desktop's one-click install path; the same server source works on any MCP client via stdio. Unofficial third-party client; not affiliated with InsuranceXDate.",
+  "version": "1.5.0",
+  "description": "TypeScript MCP server for InsuranceXDate research and account workflows. 17 tools covering fuller REST WC search/match, a guarded useful native-search subset, benefits, SERFF, company research, safe account status, groups/saved searches, flags, and notes.",
+  "long_description": "Wraps the InsuranceXDate REST API and native MCP endpoints. Preserves the fuller REST workers'-comp search while adding a guarded 37-field useful subset of the current 43-field native search schema, experimental safe-field XChange account status, and default-off agency write actions. Six native search fields that still behave as no-ops, zero-result traps, or internal contradictions are omitted. Implements parameter translation, URL decoding for company UIDs, bounded upstream requests and responses, stable errors, structuredContent for REST results, zod input validation, default-deny paid tools, and a separate default-deny write gate. Write calls require confirm=true and are never retried automatically. This .mcpb targets Claude Desktop's one-click install path; the same source works with MCP clients over stdio. Unofficial third-party client; not affiliated with InsuranceXDate.",
   "author": {
     "name": "Todd Shaner",
     "email": "todd.shaner@gmail.com"
@@ -31,7 +31,8 @@
       "args": ["${__dirname}/server/dist/index.js"],
       "env": {
         "INSURANCEXDATE_API_KEY": "${user_config.api_key}",
-        "XDATE_DISABLE_PAID": "${user_config.disable_paid_tools}"
+        "XDATE_DISABLE_PAID": "${user_config.disable_paid_tools}",
+        "XDATE_ENABLE_WRITES": "${user_config.enable_write_tools}"
       }
     }
   },
@@ -49,9 +50,20 @@
       "description": "Paid and unverified stored-content tools are disabled by default. Set to '0', 'false', 'no', or 'off' only when you explicitly authorize company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — all four ledger-confirmed 2026-07-03; charges draw from the $5/mo included allowance first, then the XChange balance), and group_companies / run_saved_search (upstream declares them free but they execute stored account content that could not be behavior-verified). Any blank, true, or unrecognized value keeps them omitted from tools/list and unable to make network calls. The always-free tools remain enabled; account-read tools among them still expose agency flag/pipeline lists and saved-search names to the connected client.",
       "default": "1",
       "required": false
+    },
+    "enable_write_tools": {
+      "type": "string",
+      "title": "Account write tools (default disabled)",
+      "description": "Set to '1', 'true', 'yes', 'on', or 'enabled' only to expose add_note and set_flag. These free tools persist agency-shared account changes. Every call also requires confirm=true; remote connections additionally require ?writes=1. The confirmation field and MCP annotations express intent but do not prove human approval, so enable writes only for a trusted client that confirms tool calls.",
+      "default": "0",
+      "required": false
     }
   },
   "tools": [
+    { "name": "native_search", "description": "Free advanced pass-through to the useful 37-field subset of XDate's current 43-field native search. Requires an explicit datamode, rejects mode-incompatible fields, and adds native-only name, NAICS, and extended benefits filters. Native WC uses a smaller universe than REST search; six currently broken native fields are omitted." },
+    { "name": "account_status", "description": "Free experimental sanitized XChange status from undocumented /api2/Account. Returns only apiBalance and apiFreeMonthly; credential, session, Stripe, unreliable MCP-access, and all other raw account fields are discarded." },
+    { "name": "add_note", "description": "Default-off free write: add an agency-shared note. Requires XDATE_ENABLE_WRITES plus confirm=true; remote connections also require ?writes=1. Never retried automatically." },
+    { "name": "set_flag", "description": "Default-off free write: set/remove flags or schedule follow-up/appointment state. Requires XDATE_ENABLE_WRITES plus confirm=true; remote connections also require ?writes=1. appttime is accepted only for followup/appt; ambiguous null/0 schedule clearing is deliberately not exposed. Never retried automatically." },
     { "name": "search", "description": "Free workers' comp prospect search. Covers working upstream filter params: state/dates/class/sic/industry/county/carrier/carrier-group/agent/peo lists, premium/mod/employee ranges, policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). naicslist is intentionally not exposed because the upstream REST endpoint ignores it (re-verified 2026-07-03). Q3 2026 dedicated DOT/NPO databases are not API-exposed; the addloptions flags remain the API-side signal." },
     { "name": "benefits_search", "description": "Free (per upstream declaration) Form 5500 benefits-plan search via upstream MCP datamode 1 (retirement: participants/assets/commissions/providers) and 2 (health: premiums/commission %/loss ratios/brokers). Only behavior-verified params exposed; workers' comp deliberately excluded (stays on search/REST)." },
     { "name": "match", "description": "Free find-by-name endpoint via /api2/Match. Look up a business by any of name/fein/phone/address, optionally scoped by state. Returns UID. FEIN must be digits-only (hyphenated returns zero — verified 2026-07-03). No additional service required per XDate support; fuzzy lookup returns the highest-score match." },

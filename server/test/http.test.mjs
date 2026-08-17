@@ -113,6 +113,17 @@ function initializeRequest(id = 0) {
   };
 }
 
+function toolsListRequest(id = 1) {
+  return { jsonrpc: "2.0", id, method: "tools/list", params: {} };
+}
+
+async function listToolNames(port, path, headers) {
+  const response = await post(port, path, toolsListRequest(), headers);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  return (payload.result?.tools ?? []).map((tool) => tool.name).sort();
+}
+
 function post(port, path, body, headers = {}) {
   return fetch(`http://127.0.0.1:${port}${path}`, {
     method: "POST",
@@ -232,6 +243,30 @@ test("BYOK: Bearer and path credentials are rejected even when identical", async
     })).status, 401);
   } finally {
     await server.close();
+  }
+});
+
+test("remote write tools require both operator env authority and ?writes=1", async () => {
+  const headers = { authorization: "Bearer test-byok-key-123" };
+  const cases = [
+    { env: "0", path: "/mcp?writes=1", expected: false },
+    { env: "1", path: "/mcp", expected: false },
+    { env: "1", path: "/mcp?writes=1", expected: true },
+  ];
+
+  for (const scenario of cases) {
+    const server = await startServer({
+      MCP_BYOK: "1",
+      XDATE_DISABLE_PAID: "1",
+      XDATE_ENABLE_WRITES: scenario.env,
+    });
+    try {
+      const names = await listToolNames(server.port, scenario.path, headers);
+      assert.equal(names.includes("add_note"), scenario.expected);
+      assert.equal(names.includes("set_flag"), scenario.expected);
+    } finally {
+      await server.close();
+    }
   }
 });
 

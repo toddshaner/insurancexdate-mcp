@@ -1,9 +1,10 @@
 /**
  * XDate tool definitions and handlers.
  *
- * Thirteen tools exposed by the wrapper. The `search` and `match` tools route
- * to REST endpoints with translated params where needed. The other eleven
- * pass through to the upstream MCP unchanged.
+ * Seventeen tools exposed by the wrapper. The `search` and `match` tools route
+ * to REST endpoints with translated params where needed, `account_status`
+ * exposes a strict safe-field view of the REST account endpoint, and the
+ * remaining tools pass through to the upstream MCP.
  *
  * Pricing — LEDGER-VERIFIED 2026-07-03 against the account's XChange usage
  * ledger (the per-call charge log in the web UI; the authoritative billing
@@ -32,12 +33,15 @@
  *     the one fresh Jul 3 talkpoints call produced NO visible charge as of
  *     the readback — unresolved (posting lag or changed billing); re-check.
  *   search            - Free (ledger-consistent: no charges)
+ *   native_search     - Free (native MCP search)
  *   match             - Free (no charges)
  *   filter            - Free (no charges)
  *   benefits_search   - Free (no charges for upstream `search`)
+ *   account_status    - Free experimental account read
  *   flagged_companies - Free (behavior-probed; no charges)
  *   groups            - Free (behavior-probed; no charges)
  *   saved_searches    - Free (behavior-probed; no charges)
+ *   add_note/set_flag - Free, default-off account writes
  *   group_companies   - GATED (unverifiable stored-content executor)
  *   run_saved_search  - GATED (unverifiable stored-content executor)
  *   serff_search      - $0.05 LEDGER-CONFIRMED, no dedupe; GATED
@@ -62,6 +66,33 @@ type Shape = Record<string, z.ZodTypeAny>;
 const STATE_CODE = z.string().regex(/^[A-Z]{2}$/, "Use uppercase two-letter state code, e.g. 'IL'");
 // MM-DD format, year-agnostic. XDate uses this for renewal-window filters.
 const MM_DD = z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/, "Use MM-DD format, e.g. '06-25'");
+function validCalendarParts(year: number, month: number, day: number, hour: number, minute: number, second: number): boolean {
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day >= 1 && day <= daysInMonth;
+}
+
+function validAppointmentDatetime(value: string): boolean {
+  const iso = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|([+-])(\d{2}):(\d{2}))$/,
+  );
+  if (iso) {
+    const [, y, mo, d, h, mi, s = "0", zone, , offsetHour = "0", offsetMinute = "0"] = iso;
+    const offsetH = Number(offsetHour);
+    const offsetM = Number(offsetMinute);
+    const validOffset = zone === "Z" || (offsetH <= 14 && offsetM <= 59 && (offsetH < 14 || offsetM === 0));
+    return validOffset && validCalendarParts(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(s));
+  }
+  const naive = value.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!naive) return false;
+  const [, y, mo, d, h, mi, s = "0"] = naive;
+  return validCalendarParts(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(s));
+}
+
+const APPOINTMENT_DATETIME = z.string().refine(
+  validAppointmentDatetime,
+  "Use ISO 8601 with Z/offset, or XDate's documented naive YYYY-MM-DD HH:mm form",
+);
 
 export const SearchSchema: Shape = {
   statelist: z.array(STATE_CODE).optional()
@@ -106,6 +137,82 @@ export const SearchSchema: Shape = {
     .describe("Results per call, 1-50. WORKS - translated to pagelimit. Hard cap 50."),
   offset: z.number().int().min(0).optional()
     .describe("Page number, 0-indexed. WORKS - translated to pageon; pageon=N returns records N*limit onward (resultstats.offset echoes N*limit). Omit or pass 0 for the first page. Verified live 2026-06-12: default echoed offset 0, pageon=1 echoed offset 5 at limit 5, pageon=2 echoed offset 10."),
+};
+
+/**
+ * Guarded projection of XDate's current native `search` schema (captured
+ * 2026-08-16). This intentionally remains separate from the recommended
+ * REST-backed `search`: native datamode 0 has useful name/NAICS filters but a
+ * materially smaller WC universe. `benefits_search` remains the conservative,
+ * behavior-verified benefits subset.
+ *
+ * This publishes the useful 37-field subset of the 43 fields XDate currently
+ * declares. Six fields are deliberately omitted because current paired probes
+ * still show silent no-op, zero-result, or internally inconsistent behavior:
+ * city, zipcode, planyear, inscommpmin, inscommpmax, and lossratiomax. List
+ * fields without a value-discovery path remain available but are labeled
+ * experimental at the point of use.
+ */
+export const NativeSearchSchema: Shape = {
+  datamode: z.union([z.literal(0), z.literal(1), z.literal(2)])
+    .describe("Required native search mode. 0 = workers' compensation, 1 = Form 5500 retirement, 2 = Form 5500 health/welfare. For normal WC prospecting prefer `search`: native mode 0 has name/NAICS filters but searches a materially smaller WC universe."),
+  statelist: z.array(STATE_CODE).optional()
+    .describe("Uppercase two-letter state codes."),
+  countylist: z.array(z.string()).optional()
+    .describe("County values from filter(param='countylist')."),
+  name: z.string().optional()
+    .describe("Partial company-name search. Useful native-only capability; verified on benefits modes. For known WC businesses, `match` remains the higher-precision workflow."),
+  fromdate: MM_DD.optional()
+    .describe("Renewal-window start (MM-DD). In datamode 2 this filters insurance renewal date."),
+  todate: MM_DD.optional()
+    .describe("Renewal-window end (MM-DD)."),
+  classlist: z.array(z.string()).optional()
+    .describe("WC class-code ids from filter(param='classlist'). Native mode 0 searches a smaller WC universe than REST `search`."),
+  siclist: z.array(z.string()).optional()
+    .describe("SIC ids from filter(param='siclist')."),
+  naicslist: z.array(z.string()).optional()
+    .describe("NAICS ids from filter(param='naicslist'). Works on native mode 0, but only against its smaller WC universe."),
+  industrylist: z.array(z.string()).optional()
+    .describe("Industry names from filter(param='industrylist')."),
+  carrierlist: z.array(z.string()).optional()
+    .describe("Carrier names from filter(param='carrierlist')."),
+  carriergrouplist: z.array(z.string()).optional()
+    .describe("Carrier-group names from filter(param='carriergrouplist')."),
+  peolist: z.array(z.string()).optional()
+    .describe("PEO names from filter(param='peolist'); availability may depend on the XDate package."),
+  premfrom: z.number().int().optional().describe("[WC] Minimum annual premium."),
+  premto: z.number().int().optional().describe("[WC] Maximum annual premium."),
+  modfrom: z.number().optional().describe("[WC] Minimum experience modification rate."),
+  modto: z.number().optional().describe("[WC] Maximum experience modification rate."),
+  partmin: z.number().int().optional().describe("[Benefits] Minimum plan participants."),
+  partmax: z.number().int().optional().describe("[Benefits] Maximum plan participants."),
+  assetmin: z.number().int().optional().describe("[Retirement] Minimum plan assets."),
+  assetmax: z.number().int().optional().describe("[Retirement] Maximum plan assets."),
+  commmin: z.number().int().optional().describe("[Retirement] Minimum commission dollars."),
+  commmax: z.number().int().optional().describe("[Retirement] Maximum commission dollars."),
+  provname: z.string().optional().describe("[Retirement] Partial service-provider name."),
+  providerlist: z.array(z.string()).optional()
+    .describe("[Retirement] Provider list declared by native XDate; no API value-discovery path is currently known."),
+  accountantfirmlist: z.array(z.string()).optional()
+    .describe("[Retirement] Accountant-firm list declared by native XDate; no API value-discovery path is currently known."),
+  fundfamilylist: z.array(z.string()).optional()
+    .describe("[Retirement] Fund-family list declared by native XDate; no API value-discovery path is currently known."),
+  featurelist: z.array(z.string()).optional()
+    .describe("[Benefits] Plan-feature list declared by native XDate; no API value-discovery path is currently known."),
+  inspremmin: z.number().int().optional().describe("[Health] Minimum insurance premium."),
+  inspremmax: z.number().int().optional().describe("[Health] Maximum insurance premium."),
+  lossratiomin: z.number().optional().describe("[Health] Minimum loss-ratio percentage; behavior-verified."),
+  brokername: z.string().optional().describe("[Health] Partial broker name; behavior-verified."),
+  insbrokerlist: z.array(z.string()).optional()
+    .describe("[Health] Insurance-broker list declared by native XDate; no API value-discovery path is currently known."),
+  healthcarriergrouplist: z.array(z.string()).optional()
+    .describe("[Health] Carrier-group list declared by native XDate; no API value-discovery path is currently known."),
+  instypelist: z.array(z.string()).optional()
+    .describe("[Health] Plan-type list. Do not use filter(param='instypelist'): that lookup returns SERFF TOI codes from a different value domain."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Records per page, 1-100 (native default 50)."),
+  offset: z.number().int().min(0).optional()
+    .describe("RECORDS TO SKIP, not the page number used by REST-backed `search`."),
 };
 
 /**
@@ -281,6 +388,28 @@ export const SerffFilingSchema: Shape = {
   filing_id: z.number().int().describe("Filing ID from serff_search.filings[].filing_id. Integer (XDate's internal ID, not the public SERFF tracking number)."),
 };
 
+export const AccountStatusSchema: Shape = {};
+
+export const AddNoteSchema: Shape = {
+  uid: z.string().min(1).refine((value) => value.trim().length > 0, "UID cannot be blank")
+    .describe("Company UID from search, company_details, or flagged_companies."),
+  note: z.string().min(1).max(1000).refine((value) => value.trim().length > 0, "Note cannot be blank")
+    .describe("Note text, 1-1000 characters. Notes are persistent and shared with other users on the same XDate agency account."),
+  confirm: z.literal(true)
+    .describe("Required explicit invocation guard. Must be true to acknowledge this permanently adds an agency-visible note. This is not proof of human approval; use a trusted client that confirms write calls."),
+};
+
+export const SetFlagSchema: Shape = {
+  uid: z.string().min(1).refine((value) => value.trim().length > 0, "UID cannot be blank")
+    .describe("Company UID from search, company_details, or flagged_companies."),
+  flag: z.enum(["save", "contacted", "quoting", "written", "nextyear", "followup", "appt", "hide", "remove"])
+    .describe("Flag to set. `hide` suppresses the record from normal views; `remove` clears all current flags for the company."),
+  appttime: APPOINTMENT_DATETIME.optional()
+    .describe("Required for followup/appt. Prefer ISO 8601 with an explicit offset (for example 2026-08-20T10:00:00-07:00). Naive times use the XDate account timezone."),
+  confirm: z.literal(true)
+    .describe("Required explicit invocation guard. Must be true to acknowledge this changes agency-shared XDate state. This is not proof of human approval; use a trusted client that confirms write calls."),
+};
+
 // -------- Output schemas --------
 
 /**
@@ -302,11 +431,17 @@ export const SerffFilingSchema: Shape = {
 
 type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>;
 
+function toolError(text: string): CallToolResult {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 export interface XdateHandlers {
   search: Handler;
+  native_search: Handler;
   benefits_search: Handler;
   match: Handler;
   filter: Handler;
+  account_status: Handler;
   company_details: Handler;
   talkpoints: Handler;
   serff_search: Handler;
@@ -316,6 +451,8 @@ export interface XdateHandlers {
   group_companies: Handler;
   saved_searches: Handler;
   run_saved_search: Handler;
+  add_note: Handler;
+  set_flag: Handler;
 }
 
 /**
@@ -371,11 +508,27 @@ export function warnIfDisablePaidUnrecognized(): void {
   }
 }
 
+/** Writes are a separate authority from paid reads and fail closed. */
+export function writesEnabled(): boolean {
+  return isTruthy(process.env.XDATE_ENABLE_WRITES);
+}
+
+export function warnIfEnableWritesUnrecognized(): void {
+  const raw = process.env.XDATE_ENABLE_WRITES ?? "";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized !== "" && !TRUTHY_VALUES.has(normalized) && !EXPLICIT_FALSE_VALUES.has(normalized)) {
+    console.error(
+      "XDATE_ENABLE_WRITES has an unrecognized value; write tools remain disabled. " +
+        "Use 1/true/yes/on/enabled only when account mutations are explicitly authorized.",
+    );
+  }
+}
+
 const PAID_DISABLED_RESULT: CallToolResult = {
   content: [
     {
       type: "text",
-      text: "Gated XDate tools are disabled in this environment. Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — ledger-confirmed 2026-07-03, despite vendor metadata claiming free), group_companies and run_saved_search (unverified stored-content executors). An operator must explicitly set XDATE_DISABLE_PAID=0 to enable them; otherwise use the always-free tools: search, match, filter, benefits_search, flagged_companies, groups, saved_searches.",
+      text: "Gated XDate tools are disabled in this environment. Gated: company_details ($0.25), talkpoints ($0.10), serff_filing ($0.10), serff_search ($0.05 — ledger-confirmed 2026-07-03, despite vendor metadata claiming free), group_companies and run_saved_search (unverified stored-content executors). An operator must explicitly set XDATE_DISABLE_PAID=0 to enable them; otherwise use the always-free read tools: search, native_search, match, filter, benefits_search, account_status, flagged_companies, groups, saved_searches.",
     },
   ],
   isError: true,
@@ -384,6 +537,128 @@ const PAID_DISABLED_RESULT: CallToolResult = {
 function gatePaid(handler: Handler): Handler {
   return async (args) => {
     if (paidDisabled()) return PAID_DISABLED_RESULT;
+    return handler(args);
+  };
+}
+
+const WRITES_DISABLED_RESULT: CallToolResult = {
+  content: [{
+    type: "text",
+    text: "XDate write tools are disabled. An operator must explicitly set XDATE_ENABLE_WRITES=1; remote callers must also connect with ?writes=1. Writes change agency-shared account state.",
+  }],
+  isError: true,
+};
+
+const WRITE_CONFIRMATION_REQUIRED_RESULT: CallToolResult = {
+  content: [{
+    type: "text",
+    text: "This XDate action requires confirm=true. The confirmation field is an explicit invocation guard, not proof of human approval.",
+  }],
+  isError: true,
+};
+
+const APPOINTMENT_TIME_REQUIRED_RESULT: CallToolResult = {
+  content: [{
+    type: "text",
+    text: "set_flag requires appttime for followup and appt flags. Prefer ISO 8601 with an explicit UTC offset.",
+  }],
+  isError: true,
+};
+
+const APPOINTMENT_TIME_NOT_ALLOWED_RESULT: CallToolResult = {
+  content: [{
+    type: "text",
+    text: "set_flag accepts appttime only with followup or appt. Native metadata conflicts on null/0 clearing, so this wrapper does not guess at a destructive clear operation.",
+  }],
+  isError: true,
+};
+
+function gateWrite(handler: Handler): Handler {
+  return async (args) => {
+    if (!writesEnabled()) return WRITES_DISABLED_RESULT;
+    if (args.confirm !== true) return WRITE_CONFIRMATION_REQUIRED_RESULT;
+    const { confirm: _confirm, ...upstreamArgs } = args;
+    return handler(upstreamArgs);
+  };
+}
+
+function requireAppointmentTime(handler: Handler): Handler {
+  return async (args) => {
+    const flag = args.flag;
+    if (
+      (flag === "followup" || flag === "appt") &&
+      (typeof args.appttime !== "string" || args.appttime.trim() === "")
+    ) {
+      return APPOINTMENT_TIME_REQUIRED_RESULT;
+    }
+    if (flag !== "followup" && flag !== "appt" && args.appttime !== undefined) {
+      return APPOINTMENT_TIME_NOT_ALLOWED_RESULT;
+    }
+    return handler(args);
+  };
+}
+
+const NATIVE_WC_ONLY_FIELDS = [
+  "classlist",
+  "carrierlist",
+  "carriergrouplist",
+  "peolist",
+  "premfrom",
+  "premto",
+  "modfrom",
+  "modto",
+] as const;
+const NATIVE_BENEFITS_ONLY_FIELDS = ["partmin", "partmax", "featurelist"] as const;
+const NATIVE_RETIREMENT_ONLY_FIELDS = [
+  "assetmin",
+  "assetmax",
+  "commmin",
+  "commmax",
+  "provname",
+  "providerlist",
+  "accountantfirmlist",
+  "fundfamilylist",
+] as const;
+const NATIVE_HEALTH_ONLY_FIELDS = [
+  "inspremmin",
+  "inspremmax",
+  "lossratiomin",
+  "brokername",
+  "insbrokerlist",
+  "healthcarriergrouplist",
+  "instypelist",
+] as const;
+
+function presentFields(args: Record<string, unknown>, fields: readonly string[]): string[] {
+  return fields.filter((field) => args[field] !== undefined);
+}
+
+/**
+ * XDate silently ignores many fields when used in the wrong datamode. Reject
+ * those combinations locally so a successful response cannot be mistaken for
+ * an honored filter.
+ */
+function validateNativeSearchMode(handler: Handler): Handler {
+  return async (args) => {
+    const mode = args.datamode;
+    if (mode !== 0 && mode !== 1 && mode !== 2) {
+      return toolError("native_search requires datamode 0 (WC), 1 (retirement), or 2 (health).");
+    }
+
+    const incompatible = mode === 0
+      ? presentFields(args, [
+          ...NATIVE_BENEFITS_ONLY_FIELDS,
+          ...NATIVE_RETIREMENT_ONLY_FIELDS,
+          ...NATIVE_HEALTH_ONLY_FIELDS,
+        ])
+      : mode === 1
+        ? presentFields(args, [...NATIVE_WC_ONLY_FIELDS, ...NATIVE_HEALTH_ONLY_FIELDS])
+        : presentFields(args, [...NATIVE_WC_ONLY_FIELDS, ...NATIVE_RETIREMENT_ONLY_FIELDS]);
+    if (incompatible.length > 0) {
+      return toolError(
+        `native_search datamode=${mode} does not accept mode-incompatible fields: ${incompatible.join(", ")}.`,
+      );
+    }
     return handler(args);
   };
 }
@@ -432,11 +707,13 @@ function requireMatchIdentifier(handler: Handler): Handler {
 export function buildHandlers(client: XdateClient): XdateHandlers {
   return {
     search: (args) => client.search(args),
+    native_search: validateNativeSearchMode((args) => client.mcpPassthrough("search", args)),
     // benefits_search rides the upstream MCP `search` tool; datamode is
     // schema-constrained to 1|2 so WC traffic can never take this path.
     benefits_search: (args) => client.mcpPassthrough("search", args),
     match: requireMatchIdentifier((args) => client.match(args)),
     filter: (args) => client.mcpPassthrough("filter", args),
+    account_status: () => client.accountStatus(),
     company_details: gatePaid((args) => client.mcpPassthrough("company_details", args)),
     talkpoints: gatePaid((args) => client.mcpPassthrough("talkpoints", args)),
     serff_search: gatePaid((args) => client.mcpPassthrough("serff_search", args)),
@@ -446,12 +723,18 @@ export function buildHandlers(client: XdateClient): XdateHandlers {
     group_companies: gatePaid((args) => client.mcpPassthrough("group_companies", args)),
     saved_searches: (args) => client.mcpPassthrough("saved_searches", args),
     run_saved_search: gatePaid((args) => client.mcpPassthrough("run_saved_search", args)),
+    add_note: gateWrite((args) => client.mcpPassthrough("add_note", args)),
+    set_flag: gateWrite(requireAppointmentTime((args) => client.mcpPassthrough("set_flag", args))),
   };
 }
 
 // -------- Tool descriptions (used in registerTool calls) --------
 
 export const TOOL_DESCRIPTIONS = {
+  native_search: "Advanced direct access to the useful 37-field subset of XDate's current 43-field native search schema. Free. Requires datamode 0=WC, 1=retirement, or 2=health and rejects fields that do not apply to that mode. It exposes native-only name and NAICS WC filters plus extended provider, fund, feature, broker, and carrier-group benefit filters. Prefer REST-backed `search` for normal WC work because native mode 0 searches a materially smaller WC universe; prefer `benefits_search` when its behavior-verified subset is sufficient. Six currently broken native fields are intentionally omitted (city, zipcode, planyear, inscommpmin, inscommpmax, lossratiomax), and list fields without a value-discovery path are labeled experimental. Pagination offset is records skipped, not a page number.",
+  account_status: "Read a sanitized XDate account billing status from an undocumented vendor endpoint. Free and experimental. Returns only apiBalance (prepaid XChange funds) and apiFreeMonthly (monthly allowance size, NOT remaining allowance). The endpoint also returns credential, session, Stripe, and unreliable MCP-access fields; this wrapper permanently discards them and never exposes the raw object. The XChange UI ledger remains authoritative for per-call charges.",
+  add_note: "Add a persistent note to a company record. Free, but writes agency-shared XDate state and cannot be rolled back through the current MCP. Requires the operator to enable XDATE_ENABLE_WRITES, confirm=true on the call, and ?writes=1 for remote connections. Never retry automatically after a timeout because the note may already have been committed and a retry can duplicate it.",
+  set_flag: "Set, remove, or schedule an XDate company flag. Free, but changes agency-shared pipeline state. Supports save/contacted/quoting/written/nextyear/followup/appt/hide/remove; followup and appt require a string appttime, while other flags reject it. Native metadata conflicts by describing null/0 schedule clearing despite declaring a string schema, so this wrapper deliberately does not expose that ambiguous clear operation. `remove` clears current flags and `hide` suppresses the record from normal views. Requires the operator to enable XDATE_ENABLE_WRITES, confirm=true on the call, and ?writes=1 for remote connections. Never retry automatically after an ambiguous timeout.",
   search: "Search workers' comp prospects. Free. Supports server-side filtering on statelist, fromdate/todate (renewal window MM-DD), classlist, siclist, industrylist, countylist, carrierlist, carriergrouplist, agentlist, peolist, premium range (premfrom/premto), mod range (modfrom/modto), employee band (fromemp/toemp 0-9), policyoptions (AR/MULTISTATE/PEO), addloptions (BENEFITS/DOT/NPO/OSHA/PEO). statelist returns multi-state operators with exposure (response 'state' field is policy-primary state, NOT exposure state - cross-state results are correct hits, not a filter mismatch). Premium data only in 8 states (CO/GA/IL/NV/NJ/OK/TX/VT). Mod data only in 8 states (DE/MA/MN/NJ/NY/NC/OH/PA). NJ is the only state with both. naicslist and name are intentionally not supported here: the REST endpoint ignores both (re-verified 2026-07-03), and while the upstream MCP's WC mode does filter on them, it searches a provably smaller WC universe (NJ: 83,143 vs REST 98,651; classlist 8810: 2,550 vs 9,282 — head-to-head 2026-07-03), so routing through it would silently drop up to a sixth of the pool. For NAICS-style WC targeting use siclist/industrylist (fuller REST universe); for find-by-name use match. Field masking (observed 2026-06-12): free search/match results return the literal string 'available' for name, fein, location, expyear, carrier, and carriergroup — treat that as 'present but withheld', not a value; real values require company_details. Q3 2026 note: XDate's dedicated DOT/NPO databases (June 23, 2026 update) are not API-exposed — upstream tools/list has no DOT/NPO search mode (checked 2026-07-03) and the vendor KB gates DOT targeting search behind an 'enhanced search add-on'; the addloptions DOT/NPO flags remain the API-side signal. For Form-5500 retirement/health prospecting use benefits_search.",
   benefits_search: "Search Form 5500 benefits-plan records (free per upstream declaration, $0/call). datamode 1 = retirement plans (401k/pension): filter by participants, plan assets, commissions, provider name. datamode 2 = health/welfare plans (medical/dental/life): filter by insurance premiums, commission %, loss ratios, broker name; fromdate/todate filter the insurance renewal date. Returns companies with UIDs for company_details/talkpoints. Server-side filtering behavior-verified 2026-07-03 (see per-param notes). Pagination: limit 1-100, offset = records to skip (NOT the page number the WC search tool uses). Workers' comp is deliberately not available here — the upstream MCP's WC mode diverges from the REST endpoint (verified 2026-07-03), so WC stays on the `search` tool. Free-tier field masking applies to results like WC search.",
   match: "Free find-by-name endpoint via /api2/Match. Find a specific business by name+state/fein/phone/address (the proper find-by-name endpoint, not search). Returns the best/highest-score fuzzy match with company UID and core fields. Useful for looking up a known prospect by name before a detail pull. XDate support confirmed 2026-05-14 that Match requires no additional service; if a 401 appears, troubleshoot account/key/request state rather than treating it as a per-call paid tool or plan add-on.",

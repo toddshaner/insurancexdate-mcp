@@ -40,8 +40,10 @@
  * A set-but-invalid limit value refuses to start (fail closed).
  *
  * Env: PORT (defaults to DEFAULT_PORT), XDATE_DISABLE_PAID (instance-wide,
- * default disabled; set to an explicit false value to allow paid tools, see
- * tools.ts). Private mode: INSURANCEXDATE_API_KEY and
+ * default disabled; set to an explicit false value to allow paid tools) and
+ * XDATE_ENABLE_WRITES (instance-wide, default disabled; set to an explicit
+ * true value to allow account mutations). See tools.ts. Private mode:
+ * INSURANCEXDATE_API_KEY and
  * MCP_PATH_TOKEN (>=16 chars) required. BYOK mode: MCP_BYOK=1 (private-mode
  * vars, if also present, are ignored with a warning). Both modes:
  * MCP_RATE_LIMIT_PER_MIN tunes the per-credential limit (defaults to
@@ -65,7 +67,7 @@ import {
   requestCost,
 } from "./rate-limit.js";
 import { API_KEY_CHARSET, createServer, readApiKeyOrExit } from "./server.js";
-import { isTruthy, warnIfDisablePaidUnrecognized } from "./tools.js";
+import { isTruthy, warnIfDisablePaidUnrecognized, warnIfEnableWritesUnrecognized } from "./tools.js";
 import { XdateClient } from "./xdate-client.js";
 
 const DEFAULT_PORT = 8080;
@@ -104,6 +106,10 @@ hosting infrastructure may record URLs.</p>
 tools, append <code>?paid=1</code> to expose the six paid tools
 ($0.05&ndash;$0.25/call upstream, billed to your key, priced in their titles).
 MCP clients are not guaranteed to prompt before each call.</p>
+<p>Persistent XDate actions are disabled separately. If the operator has
+enabled writes, append <code>?writes=1</code> to expose <code>add_note</code>
+and <code>set_flag</code>. Each call also requires <code>confirm=true</code>.
+These controls express intent but do not prove a human approved the call.</p>
 <p>Operational logging is limited to tool names, response status, and timing.
 This application does not write query contents, results, or credentials to its
 logs. Infrastructure outside the application may log URL-form credentials.
@@ -275,6 +281,8 @@ const LOGGABLE_METHODS = new Set([
   "tools/list",
 ]);
 const LOGGABLE_TOOLS = new Set([
+  "account_status",
+  "add_note",
   "benefits_search",
   "company_details",
   "filter",
@@ -282,11 +290,13 @@ const LOGGABLE_TOOLS = new Set([
   "group_companies",
   "groups",
   "match",
+  "native_search",
   "run_saved_search",
   "saved_searches",
   "search",
   "serff_filing",
   "serff_search",
+  "set_flag",
   "talkpoints",
 ]);
 
@@ -418,6 +428,7 @@ async function main() {
     pathToken = readPathTokenOrExit();
   }
   warnIfDisablePaidUnrecognized();
+  warnIfEnableWritesUnrecognized();
 
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
   const rateLimitPerMin = readRateLimitOrExit("MCP_RATE_LIMIT_PER_MIN", DEFAULT_RATE_LIMIT_PER_MIN);
@@ -598,11 +609,12 @@ async function main() {
     // against accidental spend by legitimate callers, not against a stolen
     // key — an attacker can add the parameter themselves.
     const paidOptIn = isTruthy(url.searchParams.get("paid"));
+    const writeOptIn = isTruthy(url.searchParams.get("writes"));
     const requestAbort = new AbortController();
     const client = byokMode
       ? new XdateClient(credential, requestAbort.signal)
       : new XdateClient(sharedApiKey as string, requestAbort.signal);
-    const server = createServer(client, { paidTools: paidOptIn });
+    const server = createServer(client, { paidTools: paidOptIn, writeTools: writeOptIn });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

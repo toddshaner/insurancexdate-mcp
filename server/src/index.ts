@@ -17,12 +17,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { createServer, readApiKeyOrExit } from "./server.js";
-import { warnIfDisablePaidUnrecognized } from "./tools.js";
+import { warnIfDisablePaidUnrecognized, warnIfEnableWritesUnrecognized } from "./tools.js";
 import { XdateClient } from "./xdate-client.js";
 
 async function main() {
   const apiKey = readApiKeyOrExit();
   warnIfDisablePaidUnrecognized();
+  warnIfEnableWritesUnrecognized();
 
   const server = createServer(new XdateClient(apiKey));
   const transport = new StdioServerTransport();

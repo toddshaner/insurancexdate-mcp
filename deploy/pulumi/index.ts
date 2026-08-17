@@ -82,6 +82,12 @@ export function paidToolsDisabled(rawValue: string | undefined): boolean {
 }
 const disablePaid = paidToolsDisabled(process.env.XDATE_DISABLE_PAID);
 
+const WRITE_ENABLE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+export function writeToolsEnabled(rawValue: string | undefined): boolean {
+  return WRITE_ENABLE_VALUES.has((rawValue ?? "").trim().toLowerCase());
+}
+const enableWrites = writeToolsEnabled(process.env.XDATE_ENABLE_WRITES);
+
 // Cost guardrails. App Runner's DEFAULT auto-scaling config runs up to 25
 // instances, so a sustained request flood (the endpoint is directly
 // reachable — the Cloudflare record is deliberately unproxied) scales the
@@ -206,6 +212,7 @@ const service = new aws.apprunner.Service(
           MCP_ALLOWED_HOSTS: domain.toLowerCase(),
           MCP_ALLOWED_ORIGINS: `https://${domain.toLowerCase()}`,
           XDATE_DISABLE_PAID: disablePaid ? "1" : "0",
+          XDATE_ENABLE_WRITES: enableWrites ? "1" : "0",
           ...(byokMode ? { MCP_BYOK: "1" } : {}),
           ...(process.env.MCP_RATE_LIMIT_PER_MIN?.trim()
             ? { MCP_RATE_LIMIT_PER_MIN: process.env.MCP_RATE_LIMIT_PER_MIN.trim() }

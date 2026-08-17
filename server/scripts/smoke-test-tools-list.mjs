@@ -2,8 +2,8 @@
 /**
  * No-network MCP smoke test.
  *
- * Spawns the built server twice (stdio) and asserts both registration
- * contracts:
+ * Spawns the built server across paid/write registration modes (stdio) and
+ * asserts each published contract:
  *
  * Explicit paid mode (XDATE_DISABLE_PAID=0):
  *   1. tools/list includes exactly the expected tool names (EXPECTED);
@@ -45,7 +45,10 @@ const GATED = [
   "serff_search",
   "talkpoints",
 ];
+const WRITES = ["add_note", "set_flag"];
 const EXPECTED = [
+  "account_status",
+  "add_note",
   "benefits_search",
   "company_details",
   "filter",
@@ -53,14 +56,18 @@ const EXPECTED = [
   "group_companies",
   "groups",
   "match",
+  "native_search",
   "run_saved_search",
   "saved_searches",
   "search",
   "serff_filing",
   "serff_search",
+  "set_flag",
   "talkpoints",
 ];
-const EXPECTED_FREE = EXPECTED.filter((name) => !GATED.includes(name));
+const EXPECTED_PAID_ONLY = EXPECTED.filter((name) => !WRITES.includes(name));
+const EXPECTED_WRITES_ONLY = EXPECTED.filter((name) => !GATED.includes(name));
+const EXPECTED_DEFAULT = EXPECTED.filter((name) => !GATED.includes(name) && !WRITES.includes(name));
 // Exact key set of SearchSchema. Exact equality also guarantees naicslist
 // (intentionally unexposed — no-op at the REST endpoint, re-verified
 // 2026-07-03) stays absent from the WC search tool.
@@ -112,6 +119,57 @@ const EXPECTED_BENEFITS_PARAMS = [
   "provname",
   "statelist",
   "todate",
+];
+const EXPECTED_NATIVE_SEARCH_PARAMS = [
+  "accountantfirmlist",
+  "assetmax",
+  "assetmin",
+  "brokername",
+  "carriergrouplist",
+  "carrierlist",
+  "classlist",
+  "commmax",
+  "commmin",
+  "countylist",
+  "datamode",
+  "featurelist",
+  "fromdate",
+  "fundfamilylist",
+  "healthcarriergrouplist",
+  "industrylist",
+  "insbrokerlist",
+  "inspremmax",
+  "inspremmin",
+  "instypelist",
+  "limit",
+  "lossratiomin",
+  "modfrom",
+  "modto",
+  "naicslist",
+  "name",
+  "offset",
+  "partmax",
+  "partmin",
+  "peolist",
+  "premfrom",
+  "premto",
+  "providerlist",
+  "provname",
+  "siclist",
+  "statelist",
+  "todate",
+];
+const NATIVE_INTEGER_FIELDS = [
+  "assetmax",
+  "assetmin",
+  "commmax",
+  "commmin",
+  "inspremmax",
+  "inspremmin",
+  "partmax",
+  "partmin",
+  "premfrom",
+  "premto",
 ];
 // Exact key set of SerffSearchSchema (Q3 2026 industry/policyholder filters).
 const EXPECTED_SERFF_PARAMS = [
@@ -256,7 +314,7 @@ function listTools(extraEnv) {
 }
 
 // --- Full mode: every tool registered, schemas exact, versions in sync. ---
-const full = await listTools({ XDATE_DISABLE_PAID: "0" });
+const full = await listTools({ XDATE_DISABLE_PAID: "0", XDATE_ENABLE_WRITES: "1" });
 if (full.serverVersion !== pkgVersion || full.serverVersion !== manifestVersion) {
   fail(
     `FAIL: version drift — serverInfo ${full.serverVersion}, package.json ${pkgVersion}, manifest.json ${manifestVersion}`,
@@ -275,6 +333,7 @@ if (JSON.stringify(manifestToolNames) !== JSON.stringify(expectedSorted)) {
 }
 const paramSetChecks = [
   ["search", EXPECTED_SEARCH_PARAMS],
+  ["native_search", EXPECTED_NATIVE_SEARCH_PARAMS],
   ["benefits_search", EXPECTED_BENEFITS_PARAMS],
   ["serff_search", EXPECTED_SERFF_PARAMS],
 ];
@@ -299,6 +358,36 @@ if (benefits.inputSchema.properties.limit.maximum !== 100) {
     `FAIL: benefits_search limit.maximum should pin the upstream cap of 100, got ${benefits.inputSchema.properties.limit.maximum}`,
   );
 }
+const nativeSearch = full.tools.find((t) => t.name === "native_search");
+if (nativeSearch.inputSchema.properties.limit.maximum !== 100) {
+  fail(
+    `FAIL: native_search limit.maximum should pin the upstream cap of 100, got ${nativeSearch.inputSchema.properties.limit.maximum}`,
+  );
+}
+if (!nativeSearch.inputSchema.required?.includes("datamode")) {
+  fail("FAIL: native_search must require an explicit datamode");
+}
+for (const field of NATIVE_INTEGER_FIELDS) {
+  if (nativeSearch.inputSchema.properties[field]?.type !== "integer") {
+    fail(`FAIL: native_search.${field} must remain an integer like the current upstream schema`);
+  }
+}
+const addNote = full.tools.find((t) => t.name === "add_note");
+const setFlag = full.tools.find((t) => t.name === "set_flag");
+for (const [toolName, tool] of [["add_note", addNote], ["set_flag", setFlag]]) {
+  if (!tool.inputSchema?.required?.includes("confirm")) {
+    fail(`FAIL: ${toolName} must require confirm=true`);
+  }
+  if (tool.annotations?.readOnlyHint !== false || tool.annotations?.idempotentHint !== false) {
+    fail(`FAIL: ${toolName} must advertise non-read-only, non-idempotent behavior`);
+  }
+}
+if (setFlag.annotations?.destructiveHint !== true) {
+  fail("FAIL: set_flag must advertise destructiveHint=true");
+}
+if (addNote.annotations?.destructiveHint !== false) {
+  fail("FAIL: add_note must advertise destructiveHint=false");
+}
 const filterTool = full.tools.find((t) => t.name === "filter");
 const filterEnum = [...(filterTool.inputSchema?.properties?.param?.enum ?? [])].sort();
 if (JSON.stringify(filterEnum) !== JSON.stringify(EXPECTED_FILTER_ENUM)) {
@@ -307,23 +396,38 @@ if (JSON.stringify(filterEnum) !== JSON.stringify(EXPECTED_FILTER_ENUM)) {
   );
 }
 
-// --- Free mode: gated tools absent from tools/list, not just refusing. ---
-const free = await listTools({ XDATE_DISABLE_PAID: "" });
-const freeNames = free.tools.map((t) => t.name).sort();
-console.log("Tools registered (free mode):", freeNames.join(", "));
-if (JSON.stringify(freeNames) !== JSON.stringify([...EXPECTED_FREE].sort())) {
+// --- Registration matrix: paid and write authority are independent. ---
+const defaultMode = await listTools({ XDATE_DISABLE_PAID: "", XDATE_ENABLE_WRITES: "" });
+const defaultNames = defaultMode.tools.map((t) => t.name).sort();
+console.log("Tools registered (default mode):", defaultNames.join(", "));
+if (JSON.stringify(defaultNames) !== JSON.stringify([...EXPECTED_DEFAULT].sort())) {
   fail(
-    `FAIL: free mode should register exactly the free tools.\n  expected: ${EXPECTED_FREE.join(", ")}\n  got:      ${freeNames.join(", ")}`,
+    `FAIL: default mode should register exactly the read-only free tools.\n  expected: ${EXPECTED_DEFAULT.join(", ")}\n  got:      ${defaultNames.join(", ")}`,
   );
 }
 
-const failClosed = await listTools({ XDATE_DISABLE_PAID: "unrecognized-value" });
+const paidOnly = await listTools({ XDATE_DISABLE_PAID: "0", XDATE_ENABLE_WRITES: "0" });
+const paidOnlyNames = paidOnly.tools.map((t) => t.name).sort();
+if (JSON.stringify(paidOnlyNames) !== JSON.stringify([...EXPECTED_PAID_ONLY].sort())) {
+  fail("FAIL: paid-only mode tool list drift");
+}
+
+const writesOnly = await listTools({ XDATE_DISABLE_PAID: "1", XDATE_ENABLE_WRITES: "1" });
+const writesOnlyNames = writesOnly.tools.map((t) => t.name).sort();
+if (JSON.stringify(writesOnlyNames) !== JSON.stringify([...EXPECTED_WRITES_ONLY].sort())) {
+  fail("FAIL: writes-only mode tool list drift");
+}
+
+const failClosed = await listTools({
+  XDATE_DISABLE_PAID: "unrecognized-value",
+  XDATE_ENABLE_WRITES: "unrecognized-value",
+});
 const failClosedNames = failClosed.tools.map((t) => t.name).sort();
-if (JSON.stringify(failClosedNames) !== JSON.stringify([...EXPECTED_FREE].sort())) {
-  fail("FAIL: an unrecognized paid-tool setting must fail closed");
+if (JSON.stringify(failClosedNames) !== JSON.stringify([...EXPECTED_DEFAULT].sort())) {
+  fail("FAIL: unrecognized paid/write settings must fail closed");
 }
 
 console.log(
-  `PASS: explicit paid mode registers all ${EXPECTED.length} tools (manifest in sync), default and invalid settings register exactly ${EXPECTED_FREE.length} free tools, search/benefits_search/serff_search schemas and filter enum exact, version ${pkgVersion} consistent.`,
+  `PASS: four registration modes cover all ${EXPECTED.length} tools (manifest in sync), native/search/benefits/SERFF schemas and write annotations exact, version ${pkgVersion} consistent.`,
 );
 process.exit(0);

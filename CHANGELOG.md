@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - Unreleased
+
+### Added
+
+- **Useful native search surface:** `native_search` exposes the useful 37-field subset of the 43 fields currently declared by XDate's native MCP while keeping the fuller REST-backed `search` as the recommended WC path and `benefits_search` as the behavior-verified benefits subset. It requires an explicit datamode and rejects mode-incompatible fields. Six fields that still produce no-op, zero-result, or internally contradictory behavior (`city`, `zipcode`, `planyear`, `inscommpmin`, `inscommpmax`, `lossratiomax`) remain excluded; list fields without a value lookup are labeled experimental.
+- **Account status without account leakage:** experimental `account_status` reads undocumented `GET /api2/Account` but returns only `apiBalance` and `apiFreeMonthly`. Password, session, Stripe, unreliable MCP-access, nested, and all other raw fields are permanently discarded. `apiFreeMonthly` is documented as allowance size, not remaining allowance.
+- **Native XDate actions:** `add_note` and `set_flag` expose the current supported native action contracts. Both are free but change agency-shared state, so they are independently default-off behind `XDATE_ENABLE_WRITES`, require `confirm=true`, and require `?writes=1` on remote connections. Calls are never automatically retried. `set_flag.appttime` is accepted only for follow-up/appointment; the vendor's contradictory prose about null/0 schedule clearing is deferred rather than guessed.
+- **MCP tool annotations:** free research tools advertise read-only/idempotent behavior, metered reads advertise their billing side effect, and write tools advertise non-idempotence. `set_flag` is marked destructive because `remove` clears flags and `hide` changes record visibility.
+
+### Verification
+
+- Added a no-network four-mode tool registration matrix: default 9 reads, paid-only 15, writes-only 11, and paid-plus-writes 17.
+- Added exact schema assertions for the guarded 37-field `native_search` surface, its required mode and integer fields, plus write flags, confirmation, and annotations.
+- Added stub-only action routing tests and account-response canaries proving credential, session, and Stripe fields cannot reach MCP output.
+- No live XDate mutation is part of the test suite.
+
 ## [1.4.0] — Unreleased
 
 ### Added
@@ -294,7 +310,8 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
-[1.4.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.3.5...HEAD
+[1.5.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.3.5...v1.4.0
 [1.3.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.5
 [1.3.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.4
 [1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3
