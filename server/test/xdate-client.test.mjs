@@ -60,3 +60,60 @@ test("request cancellation reaches fetch and redirects are disabled", async (t) 
   assert.equal(result.isError, true);
   assert.match(resultText(result), /cancelled or timed out/);
 });
+
+test("account_status uses GET and permanently excludes credential, session, and Stripe fields", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const canaries = [
+    "password-hash-canary",
+    "session-token-canary",
+    "stripe-secret-canary",
+    "unreliable-access-canary",
+    "unreliable-budget-canary",
+  ];
+  let requestUrl;
+  let requestOptions;
+  globalThis.fetch = async (url, options) => {
+    requestUrl = url;
+    requestOptions = options;
+    return Response.json({
+      status: "ok",
+      data: {
+        user: {
+          apiBalance: "42.5000",
+          apiFreeMonthly: "5.0000",
+          mcpAccess: canaries[3],
+          mcpMonthlyBudget: canaries[4],
+          password: canaries[0],
+          session_token: canaries[1],
+          stripe: { secret: canaries[2] },
+          nestedBalanceTrap: { apiBalance: "999999" },
+        },
+      },
+    });
+  };
+
+  const result = await new XdateClient("test-key-123").accountStatus();
+  assert.equal(requestUrl, "https://www.insurancexdate.com/api2/Account");
+  assert.equal(requestOptions.method, "GET");
+  assert.equal(requestOptions.body, undefined);
+  assert.deepEqual(result.structuredContent, {
+    apiBalance: "42.5000",
+    apiFreeMonthly: "5.0000",
+  });
+  const serialized = JSON.stringify(result);
+  for (const canary of canaries) assert.doesNotMatch(serialized, new RegExp(canary));
+  assert.doesNotMatch(serialized, /nestedBalanceTrap/);
+});
+
+test("account_status rejects malformed account envelopes without echoing them", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const canary = "malformed-account-canary";
+  globalThis.fetch = async () => Response.json({ data: { unexpected: canary } });
+
+  const result = await new XdateClient("test-key-123").accountStatus();
+  assert.equal(result.isError, true);
+  assert.match(resultText(result), /invalid response/);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
+});

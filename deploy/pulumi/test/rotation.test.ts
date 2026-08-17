@@ -31,6 +31,7 @@ delete process.env.MCP_INGRESS_RATE_LIMIT_PER_MIN;
 delete process.env.MCP_BODY_TIMEOUT_MS;
 delete process.env.MCP_MAX_INFLIGHT_REQUESTS;
 delete process.env.XDATE_DISABLE_PAID;
+delete process.env.XDATE_ENABLE_WRITES;
 delete process.env.MCP_SERVICE_NAME;
 delete process.env.MCP_ZONE_NAME;
 delete process.env.MCP_MAX_INSTANCES;
@@ -143,6 +144,11 @@ test("rotating an SSM secret produces an App Runner service diff", async () => {
     "1",
     "HTTP deployments must default paid tools off",
   );
+  assert.equal(
+    imageConfig.runtimeEnvironmentVariables.XDATE_ENABLE_WRITES,
+    "0",
+    "HTTP deployments must default write tools off",
+  );
   assert.equal(imageConfig.runtimeEnvironmentVariables.MCP_ALLOWED_HOSTS, "mcp.example.com");
   assert.equal(imageConfig.runtimeEnvironmentVariables.MCP_ALLOWED_ORIGINS, "https://mcp.example.com");
 });
@@ -163,6 +169,18 @@ test("paid tools require explicit operator opt-in in both HTTP modes", async () 
   assert.equal(infra.paidToolsDisabled("0"), false, "0 is the explicit operator opt-in");
   assert.equal(infra.paidToolsDisabled("false"), false, "false is the explicit operator opt-in");
   assert.equal(infra.paidToolsDisabled("1"), true);
+});
+
+test("write tools require explicit operator opt-in in both HTTP modes", async () => {
+  const infra = await import("../index");
+  for (const mode of ["private", "BYOK"]) {
+    assert.equal(infra.writeToolsEnabled(undefined), false, `${mode} mode must default writes off`);
+    assert.equal(infra.writeToolsEnabled(""), false, `${mode} mode must treat blank as disabled`);
+  }
+  assert.equal(infra.writeToolsEnabled("1"), true);
+  assert.equal(infra.writeToolsEnabled("true"), true);
+  assert.equal(infra.writeToolsEnabled("0"), false);
+  assert.equal(infra.writeToolsEnabled("unexpected"), false);
 });
 
 test("auto-scaling is pinned to one instance by default (concurrency bound)", async () => {

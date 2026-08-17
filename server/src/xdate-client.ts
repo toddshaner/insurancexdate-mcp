@@ -1,11 +1,13 @@
 /**
  * InsuranceXDate HTTP clients.
  *
- * Two endpoints:
+ * Four fixed upstream routes:
  *   - /api2/Search   (REST)  - used for `search`, with translated param names
- *   - /api2/McpData  (MCP)   - used as passthrough for tools that work upstream
+ *   - /api2/Match    (REST)  - used for `match`
+ *   - /api2/Account  (REST)  - used only through the `account_status` allowlist
+ *   - /api2/McpData  (MCP)   - passthrough for supported native tools
  *
- * Why two: the upstream MCP at /api2/McpData advertises premfrom/premto/modfrom/modto/limit
+ * Why search uses two routes: the upstream MCP at /api2/McpData advertises premfrom/premto/modfrom/modto/limit
  * on its `search` tool, but those values are not applied at runtime. The REST endpoint at
  * /api2/Search accepts equivalent params under different names (fromprem/toprem/frommod/
  * tomod/pagelimit) and applies them as documented in the OpenAPI spec. This client
@@ -22,11 +24,11 @@
  * SMALLER WC universe than REST (NJ baseline 83,143 vs 98,651; renewal window
  * 12,353 vs 15,085; classlist 8810: 2,550 vs 9,282; siclist 8051: 111 vs 136;
  * countylist essex: 6,739 vs 7,413). MCP dm0's name/naicslist filters DO work
- * (83,143 -> 1,208 / -> 900) but against that incomplete universe, so they are
- * deliberately not exposed. REST remains authoritative for WC. The MCP's
- * datamode 1/2 (Form 5500 benefits) filters were verified working the same day
- * and are exposed via the benefits_search tool, which passes through to the
- * upstream MCP `search` with datamode locked to 1|2.
+ * (83,143 -> 1,208 / -> 900) but against that incomplete universe. REST remains
+ * the recommended WC route; guarded native_search exposes the native route only
+ * as an explicit advanced alternative. The MCP's datamode 1/2 (Form 5500
+ * benefits) filters were verified working the same day and are exposed via the
+ * focused benefits_search tool as well as the guarded advanced surface.
  *
  * Both public methods always return a valid CallToolResult. Errors are converted to
  * isError-flagged content so the SDK never sees a malformed shape.
@@ -37,6 +39,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 const API_BASE = "https://www.insurancexdate.com/api2";
 const REST_SEARCH = `${API_BASE}/Search`;
 const REST_MATCH = `${API_BASE}/Match`;
+const REST_ACCOUNT = `${API_BASE}/Account`;
 const MCP_FALLBACK = `${API_BASE}/McpData`;
 
 /** REST `pagelimit` hard cap. Values above silently fall back to 10. */
@@ -46,6 +49,7 @@ const REST_PAGELIMIT_CAP = 50;
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Bound upstream memory use even when a peer omits or lies about Content-Length. */
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const ACCOUNT_STATUS_FIELDS = ["apiBalance", "apiFreeMonthly"] as const;
 
 class UpstreamError extends Error {
   constructor(readonly kind: "http" | "invalid" | "too_large") {
@@ -115,6 +119,15 @@ function isCallToolResult(x: unknown): x is CallToolResult {
   );
 }
 
+type SafeScalar = string | number | null;
+
+function safeScalar(value: unknown): SafeScalar {
+  if (value === null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.length <= 64 && !/[\u0000-\u001f\u007f]/.test(value)) return value;
+  return null;
+}
+
 export class XdateClient {
   constructor(private apiKey: string, private requestSignal?: AbortSignal) {
     if (!apiKey) {
@@ -174,13 +187,45 @@ export class XdateClient {
   }
 
   /**
+   * Read the account's prepaid-balance cluster without exposing the raw
+   * /Account response. XDate also includes password/session/Stripe fields in
+   * that object, so extraction is a fixed allowlist and only scalar values are
+   * permitted into either MCP content surface.
+   */
+  async accountStatus(): Promise<CallToolResult> {
+    try {
+      const payload = await this.getJson(REST_ACCOUNT);
+      const user = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as { data?: unknown }).data
+        : undefined;
+      const account = user && typeof user === "object" && !Array.isArray(user)
+        ? (user as { user?: unknown }).user
+        : undefined;
+      if (!account || typeof account !== "object" || Array.isArray(account)) {
+        throw new UpstreamError("invalid");
+      }
+      const source = account as Record<string, unknown>;
+      const status: Record<(typeof ACCOUNT_STATUS_FIELDS)[number], SafeScalar> = {
+        apiBalance: null,
+        apiFreeMonthly: null,
+      };
+      for (const field of ACCOUNT_STATUS_FIELDS) status[field] = safeScalar(source[field]);
+      return {
+        content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+        structuredContent: status,
+      };
+    } catch (err) {
+      return asMcpText(`XDate account status error: ${errorMessage(err)}`, true);
+    }
+  }
+
+  /**
    * Forward a tool call to upstream MCP at /api2/McpData unchanged.
-   * Used for the eleven upstream-MCP tools (filter, company_details,
-   * talkpoints, serff_search, serff_filing, benefits_search — which rides the
-   * upstream `search` with datamode locked to 1|2 — flagged_companies, groups,
-   * group_companies, saved_searches, run_saved_search); none need the
-   * REST-proxy translation. group_companies and run_saved_search pass through
-   * but remain gated as unverified stored-content executors.
+   * Used for the native read and action tools, including guarded native_search,
+   * benefits_search (native `search` with datamode locked to 1|2), filter,
+   * company/SERFF/workflow reads, add_note, and set_flag. None need the REST
+   * search parameter translation. group_companies and run_saved_search pass
+   * through but remain gated as unverified stored-content executors.
    * Always returns a valid CallToolResult: upstream success unwrapped, upstream
    * errors and network errors converted to isError-flagged text content.
    */
@@ -216,17 +261,25 @@ export class XdateClient {
   }
 
   private async postJson(url: string, body: unknown): Promise<unknown> {
+    return this.requestJson(url, "POST", body);
+  }
+
+  private async getJson(url: string): Promise<unknown> {
+    return this.requestJson(url, "GET");
+  }
+
+  private async requestJson(url: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       "Accept": "application/json",
       "X-API-Key": this.apiKey,
     };
+    if (method === "POST") headers["Content-Type"] = "application/json";
     const signals = [AbortSignal.timeout(REQUEST_TIMEOUT_MS)];
     if (this.requestSignal) signals.push(this.requestSignal);
     const response = await fetch(url, {
-      method: "POST",
+      method,
       headers,
-      body: JSON.stringify(body),
+      body: method === "POST" ? JSON.stringify(body) : undefined,
       redirect: "error",
       // 30s timeout: avoids the "looks like the client disconnected" symptom when
       // XDate is slow. Aborts the underlying socket cleanly.

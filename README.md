@@ -1,6 +1,6 @@
 # InsuranceXDate MCP
 
-A TypeScript [Model Context Protocol](https://modelcontextprotocol.io) server that wraps the [InsuranceXDate](https://www.insurancexdate.com) workers'-comp prospect database and SERFF rate-filing API. Works with any MCP client — Claude Desktop, Cursor, Continue, Zed, Cline, or a custom client built on the MCP SDK.
+A TypeScript [Model Context Protocol](https://modelcontextprotocol.io) server that wraps [InsuranceXDate](https://www.insurancexdate.com) research, benefits, SERFF, account-read, and account-action surfaces. Works with MCP clients over local stdio or the included remote HTTP entrypoint.
 
 > Unofficial third-party client. Not affiliated with InsuranceXDate. MIT licensed. Personal project — PRs welcome but no SLA on response times.
 
@@ -8,14 +8,16 @@ Built on the lockfile-pinned `@modelcontextprotocol/sdk`, Node 20+. Ships as bot
 
 ## What it does
 
-Exposes thirteen tools to MCP clients:
+Exposes seventeen tools in full mode. The default surface contains nine free read tools; paid reads and account writes are enabled independently:
 
 | Tool | Cost | Purpose |
 |---|---|---|
 | `search` | Free | Workers'-comp prospect search by state, renewal window, class, SIC, industry, county, carriers, carrier groups, agents, PEO providers, premium range, mod range, employee band (0-9), policy options (AR / multi-state / PEO), additional-data filters (BENEFITS / DOT / NPO / OSHA / PEO) |
+| `native_search` | Free, advanced | Guarded access to the useful 37-field subset of XDate's current 43-field native search. Requires `datamode` 0 (WC), 1 (retirement), or 2 (health), rejects fields from the wrong mode, and adds native name/NAICS and extended benefits filters. Prefer `search` for normal WC because the native WC universe is materially smaller; six currently broken native filters remain excluded |
 | `benefits_search` | Free per upstream declaration | Form 5500 benefits-plan search via upstream MCP `datamode` 1 (retirement: participants, assets, commissions, provider name) or 2 (health/welfare: premiums, commission %, loss ratios, broker name; `fromdate`/`todate` filter the insurance renewal date). Only behavior-verified params exposed (see Q3 drift notes) |
 | `match` | Free | Find a specific business by at least one of `name[]` / `fein` / `phone` / `address[]`, optionally scoped by `state`. Routes to `/api2/Match`. No additional service required per XDate support; fuzzy lookup returns the highest-score match |
 | `filter` | Free | Look up valid filter values: carriers, carrier groups, classes, SIC codes, industries, counties, agents, PEO providers, NAICS codes (for `serff_search` industry filters — not WC search), SERFF insurance-type (TOI) codes, SERFF severity-type categories (response-side reference). Policy options and additional-data options are fixed `search` enums, not filter lookups |
+| `account_status` | Free, experimental | Reads undocumented `/api2/Account` through a strict sanitizer. Returns only prepaid `apiBalance` and monthly allowance size `apiFreeMonthly`; it never exposes the raw account object or credential, session, Stripe, or unreliable MCP-access fields |
 | `company_details` | $0.25 (ledger-confirmed; gated) | Full account detail by UID: `summary`, `user_status`, `details` (field count varies by record: ~77 observed 2026-06-12, 46 on records probed 2026-07-03), `carrier_history[]` (per-policy-term rows, multi-year multi-state), `_meta` field docs. Optional `scope` blocks VERIFIED in paid responses 2026-07-03: `contacts` (names/emails/phones/LinkedIn), `altloc` → `other_locations`, `tabs` → osha + benefits blocks + a `dot[]` block on **DOT-flagged** companies (keys on the dot flag, not industry — pest-control/pool-care/NEMT fleets carry it too; 35 MCS-150 fields incl. safety rating, power units, drivers, coverage, policy number), `comments`. Dedupe: same-day repeats free (ledger-confirmed); advertised 90-day window failed a live test |
 | `talkpoints` | $0.10 (ledger-confirmed; gated) | Prospecting talking points + percentile flags by UID. Assume same-day dedupe only |
 | `serff_search` | $0.05 (ledger-confirmed — metadata's "free" claim disproven; NO dedupe; gated) | SERFF rate-filing search. `carrier_naic` now optional (statewide all-carrier queries verified); severity comma-lists, `policyholders_min`, `industry_naic_prefix`, `naics3` verified 2026-07-03; `industry_naic`, `policyholders_max` upstream-declared |
@@ -25,8 +27,15 @@ Exposes thirteen tools to MCP clients:
 | `group_companies` | Upstream-declared free, unverified — gated | Companies in a saved group (search-format results). Executes stored account content; could not be behavior-verified (no saved groups existed to probe) |
 | `saved_searches` | Free per upstream declaration | List saved prospect-search definitions. Behavior-probed 2026-07-03 |
 | `run_saved_search` | Upstream-declared free, unverified — gated | Execute a saved search by id (search-format results). Executes a stored definition the wrapper cannot inspect; could not be behavior-verified (no saved searches existed to probe) |
+| `add_note` | Free write; default off | Adds an agency-visible persistent note. Requires `XDATE_ENABLE_WRITES=1` and `confirm=true`; remote connections also require `?writes=1`. Never automatically retried |
+| `set_flag` | Free write; default off | Sets/removes flags or schedules follow-up/appointment state. Same three controls as `add_note`; `hide` and `remove` are destructive, and scheduled states may sync through XDate's connected calendar workflow. `appttime` is accepted only for follow-up/appointment; XDate's contradictory null/0 clear-time description is not exposed |
 
-The upstream write tools `set_flag` and `add_note` are intentionally **not** exposed: they mutate account state shared agency-wide (flags and notes propagate to sub-accounts). Both are free per the vendor pricing page (2026-07-03) — the exclusion is a write-safety decision, not a cost decision. Exposing them would require an explicit opt-in write gate first.
+The write tools are present but hidden by default. `confirm=true` and MCP annotations express call intent; they do not prove that a human approved the exact change. Enable `XDATE_ENABLE_WRITES` only for a trusted single-user session whose client shows tool calls before execution. A timeout can be ambiguous after XDate commits a mutation, so the wrapper never retries either action.
+
+The action schemas were reconciled to XDate's current native declarations, but
+this release's verification uses stub clients only and performs no live
+mutation. In particular, follow-up/appointment scheduling may propagate through
+XDate's configured Outlook or Google calendar integration.
 
 ## Architecture
 
@@ -46,12 +55,17 @@ MCP client (Claude Desktop, Cursor, Continue, Zed, custom...)
         │     `name`/`city`/`zipcode` — re-verified 2026-07-03 — so `/Match`
         │     is the correct route for find-by-identifier lookups)
         │
+        ├──► /api2/Account  (REST)   for experimental `account_status`
+        │     fixed allowlist returns only apiBalance and apiFreeMonthly;
+        │     the raw account response is never exposed
+        │
         └──► /api2/McpData  (MCP)    for `filter`, `company_details`,
               `talkpoints`, `serff_search`, `serff_filing`,
               `benefits_search` (upstream `search` with datamode locked
-              to 1|2), `flagged_companies`, `groups`, `group_companies`,
-              `saved_searches`, `run_saved_search` — passes parameters
-              through using the upstream MCP's documented schema
+              to 1|2), guarded `native_search`, `flagged_companies`,
+              `groups`, `group_companies`, `saved_searches`,
+              `run_saved_search`, `add_note`, and `set_flag` — passes
+              parameters through using the upstream MCP schema
 ```
 
 The split exists because the upstream MCP at `/api2/McpData` and the REST endpoint at `/api2/Search` use different parameter naming conventions and have different filter behavior on prospect search. This wrapper bridges both surfaces with a consistent client-facing schema.
@@ -63,7 +77,9 @@ The split exists because the upstream MCP at `/api2/McpData` and the REST endpoi
 - **`structuredContent`:** `search` and `match` return both `content` (text JSON fallback) and typed `structuredContent` so LLMs can reason over records without re-parsing
 - **URL-decode for UIDs:** company UIDs from `/api2/Search` come URL-encoded (`%2B`, `%2F`); wrapper decodes before forwarding to upstream MCP for paid lookups, which expect raw `+`/`/`
 - **Schema validation:** zod-validated input on every tool (state codes uppercase regex, dates MM-DD regex, premium/mod numeric, employee band 0-9, addloptions/policyoptions enum)
-- **Paid tools default denied:** the six gated tools are omitted from `tools/list` unless an operator explicitly sets `XDATE_DISABLE_PAID=0` (also accepts `false` / `no` / `off`, case-insensitive). Blank, true, and unrecognized values keep them disabled. The seven always-free tools stay enabled; account-read tools among them still expose agency flag/pipeline lists to the connected client
+- **Paid tools default denied:** the six gated tools are omitted from `tools/list` unless an operator explicitly sets `XDATE_DISABLE_PAID=0` (also accepts `false` / `no` / `off`, case-insensitive). Blank, true, and unrecognized values keep them disabled. Nine free read tools remain enabled; account-read tools among them can expose agency workflow names or prepaid-account status to the connected client
+- **Write tools default denied:** `add_note` and `set_flag` are omitted unless `XDATE_ENABLE_WRITES` is explicitly true. Every write also requires `confirm=true`; remote connections additionally require `?writes=1`. No action is automatically retried
+- **Account-response allowlist:** `account_status` discards the full undocumented account object immediately and publishes only `apiBalance` and `apiFreeMonthly`; tests seed password, session, Stripe, and misleading MCP-field canaries and prove they cannot reach MCP output
 - **Sensitive credential storage:** when installed via `.mcpb` on Claude Desktop, the API key flows through `user_config.api_key` with `"sensitive": true` and is stored in the OS keychain (Windows Credential Manager / macOS Keychain). On other MCP clients the server reads `INSURANCEXDATE_API_KEY` from `process.env`, so use whatever secret-handling pattern your client supports (env-var injection, secret store, etc.) — never hard-code keys in JSON config files committed to source control
 
 ## Install
@@ -190,8 +206,13 @@ Paid tools default disabled in the provided Pulumi deployment in both modes.
 The operator must explicitly set `XDATE_DISABLE_PAID=0` to expose them; then a
 connection's `?paid=1` expresses caller intent. It cannot override an
 operator-level disable. MCP clients are not guaranteed to prompt before each
-call, so use the operator-level disable and independently monitored budgets
-rather than relying on client UI.
+call, so use the operator-level disable rather than relying on client UI.
+
+Persistent actions are separately disabled. The operator must set
+`XDATE_ENABLE_WRITES=1`; the connection URL must include `?writes=1` (combine as
+`?paid=1&writes=1` when needed); and each action must pass `confirm=true`.
+These controls are suitable only for a trusted single-user deployment. They do
+not establish per-user identity or prove a human approved the exact mutation.
 
 Rate limiting applies per credential and, in BYOK, across the host. Operational
 JSON logs cover accepted authenticated POSTs and selected errors/rejections,
@@ -203,7 +224,8 @@ docker build -t insurancexdate-mcp server
 docker run --rm -p 8080:8080 \
   -e MCP_ALLOWED_HOSTS=localhost:8080,127.0.0.1:8080 \
   -e MCP_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
-  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 insurancexdate-mcp
+  -e MCP_BYOK=1 -e XDATE_DISABLE_PAID=1 \
+  -e XDATE_ENABLE_WRITES=0 insurancexdate-mcp
 ```
 
 Without Docker, set the same allowlist variables before running
@@ -266,6 +288,33 @@ benefits_search(datamode=1, statelist=["NJ"], partmin=50, partmax=500, assetmin=
 benefits_search(datamode=2, statelist=["TX"], lossratiomin=85, fromdate="07-03", todate="10-01")
 ```
 
+**Use a native-only WC name/NAICS filter when you accept the smaller native WC universe:**
+
+```
+native_search(datamode=0, statelist=["PA"], name="Acme", naicslist=["238"])
+```
+
+`native_search` is not a drop-in replacement for `search`. Its `offset` is a
+record count, not a page number, and the wrapper rejects benefit-only fields in
+WC mode (and vice versa) instead of letting XDate silently ignore them.
+
+**Check the prepaid balance without exposing the raw account object:**
+
+```
+account_status()
+```
+
+With writes deliberately enabled, an action still requires explicit call intent:
+
+```
+add_note(uid="company-uid", note="Called; renewal review scheduled.", confirm=true)
+set_flag(uid="company-uid", flag="followup", appttime="2026-08-20T10:00:00-07:00", confirm=true)
+```
+
+Do not retry either action after a timeout. Read back through
+`company_details(scope=["comments"])` or `flagged_companies` when confirmation is
+important; the former is a paid call.
+
 ## State-data coverage
 
 InsuranceXDate's data depth varies by state. Some filters only have data to operate on in specific states:
@@ -289,10 +338,10 @@ XDate revises its response surfaces without versioning or notice. Three things t
 
 XDate shipped a ["Q3 Search Menu Update"](https://www.insurancexdate.com/2026/06/23/q3-searchmenu/) on June 23, 2026: dedicated DOT (~1.2M filings) and NPO (~556K orgs) databases and reworked search menus. What that means for this wrapper, verified against the live API:
 
-- **The dedicated DOT/NPO databases are not API-exposed.** Upstream `tools/list` has no DOT or NPO search mode (`datamode` covers only 0=WC, 1=retirement, 2=health), and the vendor KB gates DOT targeting search ("Target by DOT carrier, number of drivers or units") behind an *enhanced search add-on*. The `addloptions` DOT/NPO flags on `search` remain the API-side signal.
-- **The upstream MCP's tool count grew from 7 to 13.** This wrapper now covers all 11 read tools and deliberately excludes the 2 write tools (`set_flag`, `add_note`).
-- **The upstream MCP's WC search mode is still not trustworthy.** It now *partially* applies premium/mod filters but diverges from REST (verified 2026-07-03: NJ `premfrom=1M` → 2 via MCP vs 112 via REST; `modfrom=1.2` → 4,743 vs 5,609). WC search stays on the REST endpoint. The benefits modes (datamode 1/2) verified clean and are exposed via `benefits_search`.
-- **Declared ≠ honored.** Upstream declares `city`/`zipcode` on its search schema, but live probes show they do not filter (dm1, 2026-07-03) — not exposed here. `planyear` returned the identical baseline for 2020/2023/2024 (unhonored); `inscommpmin`/`inscommpmax` return 0 rows for any positive bound in both NJ and TX (no usable data); `lossratiomax` is internally inconsistent (removed 1 record at 90 while `lossratiomin=95` proves ≥107 records above 90) — none exposed. Several benefits list params (`featurelist`, `providerlist`, `accountantfirmlist`, `fundfamilylist`, `healthcarriergrouplist`, `insbrokerlist`) are declared with "use the filter tool" guidance, but the filter tool rejects those lookups — no value-discovery path, not exposed. The health `instypelist` (HMO/PPO) collides with the filter tool's `instypelist` (SERFF TOI codes) — a value-domain inconsistency we document rather than inherit.
+- **No dedicated callable DOT/NPO contract was observed.** XDate markets MCP/API access across its datasets, but the current native `tools/list` has no DOT or NPO search mode (`datamode` covers only 0=WC, 1=retirement, 2=health). The proven API-side paths remain `search.addloptions` and `company_details(scope=["tabs"])`; a dedicated tool will wait for a supported schema rather than scrape the UI.
+- **The current native MCP has 13 tools.** Full wrapper mode covers all 13 native tool families, keeps the fuller REST `search`, adds `match`, retains the focused `benefits_search` alias, and adds sanitized experimental `account_status` for 17 tools total. Its guarded `native_search` intentionally omits six broken fields, and ambiguous schedule-clearing semantics remain deferred. The two native actions remain hidden unless writes are explicitly enabled.
+- **The upstream MCP's WC search mode is still not trustworthy as the default.** It applies useful name/NAICS filters but searches a materially smaller universe than REST. Normal WC stays on `search`; `native_search(datamode=0, ...)` is an explicit advanced alternative. Benefits users should prefer the verified `benefits_search` subset unless they need an experimental native-only list field.
+- **Declared ≠ honored.** Free read-only probes on 2026-08-16 reconfirmed that `city`, `zipcode`, and `planyear` leave totals unchanged; both insurance-commission-percent bounds return zero; and `lossratiomax=90` is inconsistent with the population above 95. Those six fields are excluded from `native_search`. Native list fields without a working value lookup remain exposed only as clearly labeled experimental inputs; `instypelist` is also labeled because the filter tool's identically named lookup returns SERFF TOI codes from a different value domain.
 - **Pricing: the ledger is the only reliable source.** The tools/list metadata declared `serff_search` free while the pricing page said $0.05; the account's XChange ledger settled it at $0.05 per call (see "Pricing tested against the account's own ledger" above). Same lesson for dedupe: advertised at 90 days in two written sources, ledger-verified at same-day only. The pricing page also says company_details includes "current flag/appointment status": the MCP route this wrapper uses does return that (`user_status`); the REST counterpart does not (see REST counterpart probes below). General rule for this vendor: metadata and marketing text lag or contradict actual behavior — verify against the ledger or a live probe before relying on any claim.
 
 ## Pricing tested against the account's own ledger (2026-07-03)
@@ -372,7 +421,7 @@ If you're building an automated pipeline that depends on the full per-tier table
 
 ```
 .
-├── manifest.json             # .mcpb manifest (Node type, user_config keychain, 13 tools)
+├── manifest.json             # .mcpb manifest (Node type, sensitive config, 17 tools)
 ├── .mcpbignore               # excludes src/, devDeps, source maps from the bundle
 ├── LICENSE                   # MIT
 ├── README.md                 # this file
@@ -381,9 +430,11 @@ If you're building an automated pipeline that depends on the full per-tier table
     ├── package.json          # @modelcontextprotocol/sdk + zod runtime; tsc + types as devDeps
     ├── tsconfig.json         # strict + noEmitOnError
     └── src/
-        ├── index.ts          # MCP server entry — registers tools, stdio transport
-        ├── xdate-client.ts   # REST + MCP HTTP clients with param translation, URL decoding, timeout, error handling
-        └── tools.ts          # Tool zod schemas, handler factory, paid-tool gate
+        ├── index.ts          # stdio entrypoint
+        ├── server.ts         # shared tool registration and annotations
+        ├── http.ts           # streamable-HTTP entrypoint and admission controls
+        ├── xdate-client.ts   # REST + MCP HTTP clients, sanitization, bounds, cancellation
+        └── tools.ts          # zod schemas, handler factory, paid/write gates
 ```
 
 ### Build, test, pack
@@ -395,10 +446,10 @@ npm run build               # tsc with noEmitOnError; broken builds fail fast
 npm test                    # no-network smoke test: tool registration, search schema shape, version consistency (same gate CI runs)
 node dist/index.js          # manual stdio poke (set INSURANCEXDATE_API_KEY in env)
 cd ..
-npx -y @anthropic-ai/mcpb pack .
+npx -y @anthropic-ai/mcpb@2.1.2 pack .
 ```
 
-Version bumps touch three files — `server/src/index.ts` (serverInfo), `server/package.json` (use `npm version` in `server/` so the lockfile follows), and `manifest.json` — and the smoke test asserts all three agree, so a missed one fails `npm test` rather than shipping.
+Version bumps touch `server/src/server.ts` (serverInfo), `server/package.json` plus its lockfile, and `manifest.json`. The smoke test asserts all three published versions agree, so a missed update fails `npm test` rather than shipping.
 
 ### Schema audit pattern
 
