@@ -4,7 +4,7 @@ All notable changes to this project will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.0] - Unreleased
+## [1.5.0] - 2026-08-17
 
 ### Added
 
@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added stub-only action routing tests and account-response canaries proving credential, session, and Stripe fields cannot reach MCP output.
 - No live XDate mutation is part of the test suite.
 
-## [1.4.0] — Unreleased
+## 1.4.0 development milestone — included in 1.5.0, not released separately
 
 ### Added
 
@@ -310,8 +310,7 @@ Initial public release. TypeScript MCP server. Ships as both an Anthropic `.mcpb
 - `user_config.api_key` with `"sensitive": true` for OS-keychain credential storage (Windows Credential Manager / macOS Keychain)
 - stdio transport via `@modelcontextprotocol/sdk` v1.x
 
-[1.5.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.3.5...v1.4.0
+[1.5.0]: https://github.com/toddshaner/insurancexdate-mcp/compare/v1.3.5...v1.5.0
 [1.3.5]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.5
 [1.3.4]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.4
 [1.3.3]: https://github.com/toddshaner/insurancexdate-mcp/releases/tag/v1.3.3
